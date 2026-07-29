@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "users": {
+      "title": "Users",
+      "description": "Registered users on Near Intent",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "avatar": { "type": "string" },
+        "headline": { "type": "string" },
+        "bio": { "type": "string" },
+        "trustScore": { "type": "number" },
+        "karmaPoints": { "type": "number" },
+        "coins": { "type": "number" },
+        "xp": { "type": "number" },
+        "levelName": { "type": "string" },
+        "levelNumber": { "type": "number" },
+        "location": { "type": "string" },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "badges": { "type": "array", "items": { "type": "object" } },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["name", "trustScore"]
+    },
+    "intents": {
+      "title": "Intents",
+      "description": "User intent listings for task collaboration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "location": { "type": "string" },
+        "budget": { "type": "number" },
+        "rewardKarma": { "type": "number" },
+        "urgency": { "type": "string" },
+        "status": { "type": "string" },
+        "posterId": { "type": "string" },
+        "posterName": { "type": "string" },
+        "posterAvatar": { "type": "string" },
+        "posterTrustScore": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "description", "posterId"]
+    },
+    "messages": {
+      "title": "Messages",
+      "description": "Real-time chat messages for intent collaboration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "intentId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["intentId", "senderId", "text"]
+    }
+  }
+}
