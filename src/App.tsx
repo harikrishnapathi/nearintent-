@@ -13,6 +13,9 @@ import {
   Bot,
   AlertTriangle,
   Lightbulb,
+  Globe,
+  Tag,
+  Handshake,
   X
 } from 'lucide-react';
 
@@ -29,8 +32,24 @@ import {
   redeemStoreItems
 } from './mockData';
 
-import { Intent, Match, ChatThread, ChatMessage, Mission, EscrowContract, NotificationItem, RedeemItem, UserProfile, LeaderboardItem } from './types';
-import { saveUserToFirestore, deleteUserFromFirestore, saveIntentToFirestore, deleteIntentFromFirestore, subscribeToIntents, subscribeToUsers } from './lib/firebaseService';
+import { Intent, Match, ChatThread, ChatMessage, Mission, EscrowContract, NotificationItem, RedeemItem, UserProfile, LeaderboardItem, CallSignal } from './types';
+import {
+  saveUserToFirestore,
+  deleteUserFromFirestore,
+  saveIntentToFirestore,
+  deleteIntentFromFirestore,
+  subscribeToIntents,
+  subscribeToUsers,
+  saveThreadToFirestore,
+  subscribeToThreads,
+  saveMessageToFirestore,
+  deleteMessageFromFirestore,
+  deleteThreadFromFirestore,
+  subscribeToAllMessages,
+  saveCallSignalToFirestore,
+  subscribeToCalls,
+  updateCallSignalInFirestore
+} from './lib/firebaseService';
 import { Header } from './components/Header';
 import { IntentCard } from './components/IntentCard';
 import { CreateIntentModal } from './components/CreateIntentModal';
@@ -47,6 +66,8 @@ import { NotificationDrawer } from './components/NotificationDrawer';
 import { UserAuthModal } from './components/UserAuthModal';
 import { SettingsModal } from './components/SettingsModal';
 import { VideoCallModal } from './components/VideoCallModal';
+import { IncomingCallModal } from './components/IncomingCallModal';
+import { CategorySelectorModal } from './components/CategorySelectorModal';
 import { ProfileView } from './components/ProfileView';
 
 export default function App() {
@@ -56,6 +77,10 @@ export default function App() {
   });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [user, setUser] = useState<UserProfile>(() => {
+    const sess = sessionStorage.getItem('near_intent_user');
+    if (sess) {
+      try { return JSON.parse(sess); } catch (e) { console.error(e); }
+    }
     const saved = localStorage.getItem('near_intent_user');
     if (saved) {
       try { return JSON.parse(saved); } catch (e) { console.error(e); }
@@ -83,8 +108,23 @@ export default function App() {
     }, 4000);
   };
 
+  // Helper to trigger real-time updates across multiple windows/tabs
+  const notifyCrossTabSync = () => {
+    try {
+      localStorage.setItem('app_intents_sync_trigger', Date.now().toString());
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('near_intent_realtime_channel');
+        bc.postMessage({ type: 'INTENT_UPDATE', timestamp: Date.now() });
+        bc.close();
+      }
+    } catch (e) {
+      console.warn('Cross tab broadcast error:', e);
+    }
+  };
+
   React.useEffect(() => {
     if (user) {
+      sessionStorage.setItem('near_intent_user', JSON.stringify(user));
       localStorage.setItem('near_intent_user', JSON.stringify(user));
       saveUserToFirestore(user);
     }
@@ -100,8 +140,7 @@ export default function App() {
   React.useEffect(() => {
     const unsubscribeIntents = subscribeToIntents((fsIntents) => {
       if (fsIntents && fsIntents.length > 0) {
-        setIntents(fsIntents);
-        localStorage.setItem('app_intents', JSON.stringify(fsIntents));
+        mergeAndSetIntents(fsIntents);
       }
     });
 
@@ -122,6 +161,49 @@ export default function App() {
     return () => {
       unsubscribeIntents();
       unsubscribeUsers();
+    };
+  }, []);
+
+  // Real-time Multi-Window Polling & BroadcastChannel Sync Effect
+  React.useEffect(() => {
+    const fetchServerIntents = async () => {
+      try {
+        const res = await fetch('/api/intents');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.intents)) {
+          mergeAndSetIntents(data.intents);
+        }
+      } catch (e) {
+        // quiet fallback
+      }
+    };
+
+    fetchServerIntents();
+    const interval = setInterval(fetchServerIntents, 1500);
+
+    let bc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        bc = new BroadcastChannel('near_intent_realtime_channel');
+        bc.onmessage = (e) => {
+          if (e.data && e.data.type === 'INTENT_UPDATE') {
+            fetchServerIntents();
+          }
+        };
+      } catch (err) {}
+    }
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'app_intents_sync_trigger') {
+        fetchServerIntents();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      clearInterval(interval);
+      if (bc) bc.close();
+      window.removeEventListener('storage', handleStorageChange);
     };
   }, []);
 
@@ -176,16 +258,142 @@ export default function App() {
   };
 
   const [intents, setIntents] = useState<Intent[]>([]);
+
+  // Helper to merge and update intents state without duplicates
+  const mergeAndSetIntents = (incomingIntents: Intent[]) => {
+    if (!incomingIntents || !Array.isArray(incomingIntents)) return;
+    setIntents(prev => {
+      const map = new Map<string, Intent>();
+      prev.forEach(i => map.set(i.id, i));
+      incomingIntents.forEach(i => {
+        map.set(i.id, i);
+      });
+      const merged = Array.from(map.values());
+      merged.sort((a, b) => b.createdAt - a.createdAt);
+      try {
+        localStorage.setItem('app_intents', JSON.stringify(merged));
+      } catch (e) {}
+      return merged;
+    });
+  };
   const [matchesMap, setMatchesMap] = useState<Record<string, Match[]>>({});
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage[]>>({});
   const [isGeneratingMissions, setIsGeneratingMissions] = useState(false);
+  const [incomingCallSignal, setIncomingCallSignal] = useState<CallSignal | null>(null);
+  const [activeCallSignal, setActiveCallSignal] = useState<CallSignal | null>(null);
+  const [isCallMinimized, setIsCallMinimized] = useState<boolean>(false);
   const [activeCall, setActiveCall] = useState<{
     participantName: string;
     participantAvatar: string;
     intentTitle: string;
     callType: 'audio' | 'video';
+    status?: 'calling' | 'accepted' | 'ended' | 'declined';
   } | null>(null);
+
+  // Cross-tab / Multi-window real-time Message & Call Signal Broadcast Listener
+  React.useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined' || !user || !user.id) return;
+
+    try {
+      const msgBc = new BroadcastChannel('near_intent_messages_channel');
+      msgBc.onmessage = (e) => {
+        if (e.data && e.data.type === 'NEW_MESSAGE' && e.data.threadId && e.data.message) {
+          const incomingMsg = e.data.message;
+          setMessagesMap(prev => {
+            const currentMsgs = prev[e.data.threadId] || [];
+            if (currentMsgs.some(m => m.id === incomingMsg.id)) return prev;
+            return {
+              ...prev,
+              [e.data.threadId]: [...currentMsgs, incomingMsg]
+            };
+          });
+        }
+      };
+
+      const callBc = new BroadcastChannel('near_intent_call_signals');
+      callBc.onmessage = (e) => {
+        if (!e.data) return;
+        if (e.data.type === 'CALL_INITIATED' && e.data.callSignal) {
+          const sig = e.data.callSignal;
+          if (sig.receiverId === user.id && sig.status === 'calling') {
+            setIncomingCallSignal(sig);
+          }
+        } else if (e.data.type === 'CALL_ACCEPTED' && e.data.callSignal) {
+          const sig = e.data.callSignal;
+          if (sig.callerId === user.id || sig.receiverId === user.id) {
+            setIncomingCallSignal(null);
+            setActiveCallSignal(sig);
+            const isCaller = sig.callerId === user.id;
+            setActiveCall({
+              participantName: isCaller ? sig.receiverName : sig.callerName,
+              participantAvatar: isCaller ? sig.receiverAvatar : sig.callerAvatar,
+              intentTitle: sig.intentTitle,
+              callType: sig.type,
+              status: 'accepted'
+            });
+          }
+        } else if (e.data.type === 'CALL_ENDED') {
+          setActiveCallSignal(null);
+          setActiveCall(null);
+        }
+      };
+
+      return () => {
+        msgBc.close();
+        callBc.close();
+      };
+    } catch (err) {}
+  }, [user?.id]);
+
+  // Real-time Chat & Call Firestore Subscriptions
+  React.useEffect(() => {
+    if (!user || !user.id) return;
+
+    const unsubThreads = subscribeToThreads(user.id, (fsThreads) => {
+      setThreads(fsThreads);
+    });
+
+    const unsubMsgs = subscribeToAllMessages((fsMessagesMap) => {
+      setMessagesMap(fsMessagesMap);
+    });
+
+    const unsubCalls = subscribeToCalls(user.id, (fsCalls) => {
+      const incoming = fsCalls.find(c => c.receiverId === user.id && c.status === 'calling');
+      setIncomingCallSignal(incoming || null);
+
+      const active = fsCalls.find(c =>
+        (c.callerId === user.id && (c.status === 'calling' || c.status === 'accepted')) ||
+        (c.receiverId === user.id && c.status === 'accepted')
+      );
+
+      if (active) {
+        setActiveCallSignal(active);
+        const isCaller = active.callerId === user.id;
+        setActiveCall({
+          participantName: isCaller ? active.receiverName : active.callerName,
+          participantAvatar: isCaller ? active.receiverAvatar : active.callerAvatar,
+          intentTitle: active.intentTitle,
+          callType: active.type,
+          status: active.status
+        });
+      } else {
+        if (activeCallSignal) {
+          const ended = fsCalls.find(c => c.id === activeCallSignal.id && (c.status === 'ended' || c.status === 'declined'));
+          if (ended) {
+            setActiveCallSignal(null);
+            setActiveCall(null);
+          }
+        }
+      }
+    });
+
+    return () => {
+      unsubThreads();
+      unsubMsgs();
+      unsubCalls();
+    };
+  }, [user?.id, activeCallSignal?.id]);
 
   const [missions, setMissions] = useState<Mission[]>([
     {
@@ -309,6 +517,93 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('explore');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [selectedPlatform, setSelectedPlatform] = useState<string>('All Platforms');
+  const [radiusKm, setRadiusKm] = useState<number>(30);
+  const [isCategorySelectorOpen, setIsCategorySelectorOpen] = useState(true);
+
+  // Precise Geolocation Pipeline State
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationPermission, setLocationPermission] = useState<'prompt' | 'requesting' | 'granted' | 'denied'>('prompt');
+
+  // Haversine distance calculator in kilometers
+  const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Earth radius in km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Math.round(R * c * 10) / 10;
+  };
+
+  // Request precise location on app open to connect with nearest intent serve people
+  const requestPreciseLocation = React.useCallback(() => {
+    if (!navigator.geolocation) {
+      showToast('Geolocation is not supported by your browser.', 'error');
+      setLocationPermission('denied');
+      return;
+    }
+
+    setLocationPermission('requesting');
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        setUserCoords({ lat, lng });
+        setLocationPermission('granted');
+
+        const locString = `GPS (${lat.toFixed(3)}, ${lng.toFixed(3)})`;
+
+        // Update current user location
+        setUser(prev => ({
+          ...prev,
+          location: locString
+        }));
+
+        // Dynamically calculate distance for all active intents and sort by nearest proximity
+        setIntents(prevIntents => {
+          if (!prevIntents || prevIntents.length === 0) return prevIntents;
+          const updated = prevIntents.map((intent, idx) => {
+            const intentLat = intent.lat ?? (lat + (Math.sin(idx + 1) * 0.04));
+            const intentLng = intent.lng ?? (lng + (Math.cos(idx + 1) * 0.04));
+            const dist = calculateHaversineDistance(lat, lng, intentLat, intentLng);
+            return {
+              ...intent,
+              lat: intentLat,
+              lng: intentLng,
+              distanceKm: dist
+            };
+          });
+
+          // Sort nearest intent serve people first
+          updated.sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
+          return updated;
+        });
+
+        showToast('📍 Precise GPS location acquired! Connected to nearest intent serve pipeline.', 'success');
+      },
+      (error) => {
+        console.warn('Geolocation permission error:', error);
+        setLocationPermission('denied');
+        showToast('📍 Location access required to connect with nearest intent serve people.', 'info');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
+  }, []);
+
+  // Auto trigger location request as soon as app opens
+  React.useEffect(() => {
+    requestPreciseLocation();
+  }, [requestPreciseLocation]);
 
   // Modal & Drawer States
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -511,12 +806,19 @@ export default function App() {
       read: false
     };
     setNotifications(prev => [newNotif, ...prev]);
+
+    // Trigger multi-window / cross-tab sync
+    notifyCrossTabSync();
   };
 
   // Delete Intent Handler
   const handleDeleteIntent = async (intentId: string) => {
     setIntents(prev => prev.filter(i => i.id !== intentId));
     await deleteIntentFromFirestore(intentId);
+    try {
+      await fetch(`/api/intents/${intentId}`, { method: 'DELETE' });
+    } catch (e) {}
+    notifyCrossTabSync();
     if (selectedIntentForModal?.id === intentId) {
       setSelectedIntentForModal(null);
     }
@@ -533,33 +835,156 @@ export default function App() {
     showToast('⚡ Intent boosted! Your intent is now pinned to the top of candidate feeds for 24 hours.', 'success');
   };
 
-  // Start Chat Handler
-  const handleStartChat = (intent: Intent, candidateMatch?: Match) => {
-    const participantName = candidateMatch?.userName || 'Sarah Jenkins';
-    const participantAvatar = candidateMatch?.userAvatar || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=250';
-    const participantTrust = candidateMatch?.trustScore || 99;
+  // Handle Accept Intent to Serve
+  const handleAcceptIntent = (intent: Intent, chosenPlatform?: string) => {
+    if (intent.creatorId === user.id) {
+      showToast('You published this intent! Other community members will accept to serve it, or you can chat with matched candidates.', 'info');
+      return;
+    }
 
-    const existingThread = threads.find(t => t.intentId === intent.id);
+    const platName = chosenPlatform || (intent.platforms && intent.platforms[0]) || 'Web App';
+    const updatedIntent: Intent = {
+      ...intent,
+      status: 'serving',
+      acceptedByUserId: user.id,
+      acceptedByUserName: user.name,
+      acceptedByAvatar: user.avatar,
+      acceptedByPlatform: platName,
+      acceptedAt: Date.now()
+    };
+
+    // Update local state
+    setIntents(prev => {
+      const updated = prev.map(i => i.id === intent.id ? updatedIntent : i);
+      localStorage.setItem('app_intents', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Save update to Firestore
+    saveIntentToFirestore(updatedIntent);
+
+    // Save update to Express backend
+    fetch(`/api/intents/${intent.id}/accept`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        acceptedByUserId: user.id,
+        acceptedByUserName: user.name,
+        acceptedByAvatar: user.avatar,
+        acceptedByPlatform: platName
+      })
+    })
+    .then(() => notifyCrossTabSync())
+    .catch(e => console.error('Failed to update server intent status:', e));
+
+    notifyCrossTabSync();
+
+    // Award XP and Coins for accepting to serve
+    setUser(prev => ({
+      ...prev,
+      xp: prev.xp + 100,
+      coins: prev.coins + 50,
+      completedIntents: prev.completedIntents + 1
+    }));
+
+    // Add notification for user
+    const newNotif: NotificationItem = {
+      id: `n_acc_${Date.now()}`,
+      type: 'match',
+      title: 'Intent Accepted to Serve',
+      message: `You accepted to serve "${intent.title}" on ${platName}. Workspace chat opened with ${intent.creatorName}.`,
+      timestamp: Date.now(),
+      read: false
+    };
+    setNotifications(prev => [newNotif, ...prev]);
+
+    showToast(`🎉 Accepted to serve "${intent.title}" on ${platName}! (+100 XP, +50 Coins)`, 'success');
+
+    // Automatically open chat thread with intent creator
+    handleStartChat(updatedIntent);
+  };
+
+  // Start Chat Handler (Correctly connects poster and candidate)
+  const handleStartChat = (intent: Intent, candidateMatch?: Match) => {
+    let participantId = '';
+    let participantName = '';
+    let participantAvatar = '';
+    let participantTrust = 98;
+    let participantTitle = 'Collaborator';
+
+    if (candidateMatch) {
+      participantId = candidateMatch.userId;
+      participantName = candidateMatch.userName;
+      participantAvatar = candidateMatch.userAvatar;
+      participantTrust = candidateMatch.trustScore;
+      participantTitle = candidateMatch.userTitle;
+    } else if (user.id !== intent.creatorId) {
+      // Current user is responding to someone else's intent
+      participantId = intent.creatorId;
+      participantName = intent.creatorName;
+      participantAvatar = intent.creatorAvatar;
+      participantTrust = intent.creatorTrustScore || 98;
+      participantTitle = 'Intent Poster';
+    } else {
+      // Current user is creator viewing their own intent
+      const intentMatches = matchesMap[intent.id] || [];
+      const firstMatch = intentMatches[0];
+      if (firstMatch) {
+        participantId = firstMatch.userId;
+        participantName = firstMatch.userName;
+        participantAvatar = firstMatch.userAvatar;
+        participantTrust = firstMatch.trustScore;
+        participantTitle = firstMatch.userTitle;
+      } else {
+        const otherUser = registeredUsersList.find(u => u.id !== user.id);
+        if (otherUser) {
+          participantId = otherUser.id;
+          participantName = otherUser.name;
+          participantAvatar = otherUser.avatar;
+          participantTrust = otherUser.trustScore;
+          participantTitle = otherUser.headline;
+        } else {
+          participantId = 'cand_1';
+          participantName = 'Priya Sharma';
+          participantAvatar = 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=250';
+          participantTrust = 97;
+          participantTitle = 'Fullstack Engineer';
+        }
+      }
+    }
+
+    const existingThread = threads.find(
+      t => t.intentId === intent.id && (
+        (t.participantId === participantId && t.createdByUserId === user.id) ||
+        (t.createdByUserId === participantId && t.participantId === user.id)
+      )
+    );
+
     if (existingThread) {
       setActiveTab('chat');
       if (selectedIntentForModal) setSelectedIntentForModal(null);
       return;
     }
 
-    const newThreadId = `th_${Date.now()}`;
+    const newThreadId = `th_${intent.id}_${user.id.slice(-4)}_${participantId.slice(-4)}`;
     const newThread: ChatThread = {
       id: newThreadId,
       intentId: intent.id,
       intentTitle: intent.title,
-      participantId: candidateMatch?.userId || 'cand_1',
+      createdByUserId: user.id,
+      createdByUserName: user.name,
+      createdByUserAvatar: user.avatar,
+      createdByTrustScore: user.trustScore || 98,
+      createdByTitle: user.headline || 'Collaborator',
+      participantId: participantId,
       participantName: participantName,
       participantAvatar: participantAvatar,
       participantTrustScore: participantTrust,
-      participantTitle: candidateMatch?.userTitle || 'Expert Contributor',
-      lastMessage: `Hi ${participantName}, Near Intent matched us for "${intent.title}".`,
+      participantTitle: participantTitle,
+      lastMessage: `Hi ${participantName}, connecting regarding "${intent.title}".`,
       lastMessageTimestamp: Date.now(),
       unreadCount: 0,
-      status: 'collaborating'
+      status: 'collaborating',
     };
 
     const initialMsg: ChatMessage = {
@@ -568,10 +993,13 @@ export default function App() {
       senderId: user.id,
       senderName: user.name,
       senderAvatar: user.avatar,
-      text: `Hi ${participantName}! Near Intent matched us with a ${candidateMatch?.matchPercentage || 97}% compatibility score. Are you free to collaborate?`,
+      text: `Hi ${participantName}! Ready to collaborate on "${intent.title}".`,
       timestamp: Date.now(),
       type: 'text'
     };
+
+    saveThreadToFirestore(newThread);
+    saveMessageToFirestore(initialMsg);
 
     setThreads(prev => [newThread, ...prev]);
     setMessagesMap(prev => ({ ...prev, [newThreadId]: [initialMsg] }));
@@ -580,7 +1008,15 @@ export default function App() {
   };
 
   // Send Chat Message Handler
-  const handleSendMessage = (threadId: string, text: string, type: 'text' | 'voice' | 'image' | 'file' = 'text') => {
+  const handleSendMessage = (
+    threadId: string,
+    text: string,
+    type: 'text' | 'voice' | 'image' | 'file' = 'text',
+    mediaUrl?: string,
+    fileName?: string,
+    fileSize?: string,
+    voiceDurationSec?: number
+  ) => {
     const newMsg: ChatMessage = {
       id: `msg_${Date.now()}`,
       threadId,
@@ -589,8 +1025,26 @@ export default function App() {
       senderAvatar: user.avatar,
       text,
       timestamp: Date.now(),
-      type
+      type,
+      mediaUrl,
+      fileName,
+      fileSize,
+      voiceDurationSec
     };
+
+    saveMessageToFirestore(newMsg);
+
+    const displaySummary = type === 'voice' ? '🎙️ Voice Note' : type === 'image' ? '📷 Image Attachment' : type === 'file' ? `📎 ${fileName || 'File Attachment'}` : text;
+
+    const targetThread = threads.find(t => t.id === threadId);
+    if (targetThread) {
+      const updatedThread = {
+        ...targetThread,
+        lastMessage: displaySummary,
+        lastMessageTimestamp: Date.now()
+      };
+      saveThreadToFirestore(updatedThread);
+    }
 
     setMessagesMap(prev => ({
       ...prev,
@@ -600,10 +1054,176 @@ export default function App() {
     setThreads(prev =>
       prev.map(t =>
         t.id === threadId
-          ? { ...t, lastMessage: text, lastMessageTimestamp: Date.now() }
+          ? { ...t, lastMessage: displaySummary, lastMessageTimestamp: Date.now() }
           : t
       )
     );
+
+    notifyCrossTabSync();
+
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('near_intent_messages_channel');
+        bc.postMessage({ type: 'NEW_MESSAGE', threadId, message: newMsg });
+        bc.close();
+      }
+    } catch (e) {}
+  };
+
+  // Delete single message handler
+  const handleDeleteMessage = (threadId: string, messageId: string) => {
+    // Delete from Firestore
+    deleteMessageFromFirestore(messageId);
+
+    // Update local state
+    setMessagesMap(prev => {
+      const updatedList = (prev[threadId] || []).filter(m => m.id !== messageId);
+      return { ...prev, [threadId]: updatedList };
+    });
+
+    notifyCrossTabSync();
+    showToast('Message deleted successfully', 'info');
+  };
+
+  // Delete entire conversation thread handler
+  const handleDeleteThread = (threadId: string) => {
+    // Delete thread and messages from Firestore
+    deleteThreadFromFirestore(threadId);
+
+    // Delete local state
+    setThreads(prev => prev.filter(t => t.id !== threadId));
+    setMessagesMap(prev => {
+      const copy = { ...prev };
+      delete copy[threadId];
+      return copy;
+    });
+
+    notifyCrossTabSync();
+    showToast('Conversation thread deleted', 'info');
+  };
+
+  // Block / Unblock user handler
+  const handleToggleBlockUser = (targetUserId: string, targetUserName: string) => {
+    setUser(prevUser => {
+      if (!prevUser) return prevUser;
+      const currentBlocked = prevUser.blockedUserIds || [];
+      const isAlreadyBlocked = currentBlocked.includes(targetUserId);
+
+      const updatedBlocked = isAlreadyBlocked
+        ? currentBlocked.filter(id => id !== targetUserId)
+        : [...currentBlocked, targetUserId];
+
+      const updatedUser: UserProfile = {
+        ...prevUser,
+        blockedUserIds: updatedBlocked
+      };
+
+      saveUserToFirestore(updatedUser);
+      localStorage.setItem('near_intent_user', JSON.stringify(updatedUser));
+      sessionStorage.setItem('near_intent_user', JSON.stringify(updatedUser));
+
+      if (isAlreadyBlocked) {
+        showToast(`Unblocked ${targetUserName}`, 'info');
+      } else {
+        showToast(`Blocked ${targetUserName}. Communications disabled.`, 'error');
+      }
+
+      return updatedUser;
+    });
+  };
+
+  // Call Handlers (Real-time P2P Signal & Audio/Video Call)
+  const handleInitiateCall = (
+    receiverId: string,
+    receiverName: string,
+    receiverAvatar: string,
+    intentTitle: string,
+    callType: 'audio' | 'video' = 'audio'
+  ) => {
+    const callSignal: CallSignal = {
+      id: `call_${Date.now()}`,
+      callerId: user.id,
+      callerName: user.name,
+      callerAvatar: user.avatar,
+      receiverId: receiverId,
+      receiverName: receiverName,
+      receiverAvatar: receiverAvatar,
+      intentTitle: intentTitle,
+      type: callType,
+      status: 'calling',
+      createdAt: Date.now()
+    };
+
+    saveCallSignalToFirestore(callSignal);
+    setActiveCallSignal(callSignal);
+    setIsCallMinimized(false);
+    setActiveCall({
+      participantName: receiverName,
+      participantAvatar: receiverAvatar,
+      intentTitle: intentTitle,
+      callType: callType,
+      status: 'calling'
+    });
+
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('near_intent_call_signals');
+        bc.postMessage({ type: 'CALL_INITIATED', callSignal });
+        bc.close();
+      }
+    } catch (e) {}
+  };
+
+  const handleAcceptCall = (call: CallSignal) => {
+    updateCallSignalInFirestore(call.id, { status: 'accepted' });
+    setIncomingCallSignal(null);
+    const updatedSignal: CallSignal = { ...call, status: 'accepted' };
+    setActiveCallSignal(updatedSignal);
+    setIsCallMinimized(false);
+    setActiveCall({
+      participantName: call.callerName,
+      participantAvatar: call.callerAvatar,
+      intentTitle: call.intentTitle,
+      callType: call.type,
+      status: 'accepted'
+    });
+
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('near_intent_call_signals');
+        bc.postMessage({ type: 'CALL_ACCEPTED', callSignal: updatedSignal });
+        bc.close();
+      }
+    } catch (e) {}
+  };
+
+  const handleDeclineCall = (call: CallSignal) => {
+    updateCallSignalInFirestore(call.id, { status: 'declined' });
+    setIncomingCallSignal(null);
+
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('near_intent_call_signals');
+        bc.postMessage({ type: 'CALL_ENDED', callId: call.id });
+        bc.close();
+      }
+    } catch (e) {}
+  };
+
+  const handleEndCall = () => {
+    if (activeCallSignal) {
+      updateCallSignalInFirestore(activeCallSignal.id, { status: 'ended' });
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          const bc = new BroadcastChannel('near_intent_call_signals');
+          bc.postMessage({ type: 'CALL_ENDED', callId: activeCallSignal.id });
+          bc.close();
+        }
+      } catch (e) {}
+      setActiveCallSignal(null);
+    }
+    setIsCallMinimized(false);
+    setActiveCall(null);
   };
 
   // Claim Mission Reward Handler
@@ -656,7 +1276,16 @@ export default function App() {
     if (selectedIntentForModal) setSelectedIntentForModal(null);
   };
 
-  // Filtered Intents
+  // Category Counts
+  const intentsCountByCategory = React.useMemo(() => {
+    const map: Record<string, number> = { All: intents.length };
+    intents.forEach(i => {
+      map[i.category] = (map[i.category] || 0) + 1;
+    });
+    return map;
+  }, [intents]);
+
+  // Filtered Intents by Search, Category, Platform, and Radius
   const filteredIntents = intents.filter(i => {
     const matchesSearch =
       i.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -666,7 +1295,15 @@ export default function App() {
     const matchesCat =
       selectedCategory === 'All' || i.category === selectedCategory;
 
-    return matchesSearch && matchesCat;
+    const matchesPlat =
+      selectedPlatform === 'All Platforms' ||
+      !i.platforms ||
+      i.platforms.includes(selectedPlatform);
+
+    const dist = i.distanceKm ?? 2.5;
+    const matchesRadius = radiusKm === 100 || dist <= radiusKm;
+
+    return matchesSearch && matchesCat && matchesPlat && matchesRadius;
   });
 
   const categoriesList = ['All', 'Startup/Tech', 'Sports/Fitness', 'Emergency/Health', 'Services/Trades', 'Co-founder/Networking', 'Community/Help'];
@@ -691,6 +1328,9 @@ export default function App() {
         notifications={notifications}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
+        selectedCategory={selectedCategory}
+        radiusKm={radiusKm}
+        onOpenCategorySelector={() => setIsCategorySelectorOpen(true)}
       />
 
       {/* Main Container View Switcher */}
@@ -698,36 +1338,132 @@ export default function App() {
         {activeTab === 'explore' && (
           <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6 sm:space-y-8 w-full max-w-full">
             
-            {/* Header Action & Category Filter Chips */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200 dark:border-slate-800/80 text-xs">
-              <div className="flex items-center gap-2 overflow-x-auto scrollbar-none py-1">
-                <Filter className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
+            {/* Nearest Intent Serve Precise Location Pipeline Banner */}
+            <div className="bg-gradient-to-r from-indigo-950/90 via-slate-900 to-indigo-950/90 border border-indigo-500/30 rounded-3xl p-4 sm:p-5 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative overflow-hidden">
+              <div className="flex items-center gap-3.5 z-10">
+                <div className="w-11 h-11 rounded-2xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center shrink-0 shadow-inner">
+                  <MapPin className="w-6 h-6 text-indigo-400 animate-bounce" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm sm:text-base font-extrabold text-white tracking-tight">Nearest Intent Serve Pipeline</h3>
+                    <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border uppercase tracking-wider ${
+                      locationPermission === 'granted'
+                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                        : locationPermission === 'requesting'
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+                        : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                    }`}>
+                      {locationPermission === 'granted' ? '📍 GPS Pipeline Active' : locationPermission === 'requesting' ? '⌛ Requesting GPS...' : '⚠️ Location Required'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 font-medium mt-0.5">
+                    {userCoords
+                      ? `GPS: ${userCoords.lat.toFixed(4)}, ${userCoords.lng.toFixed(4)} — Connected to nearest intent serve people in real-time.`
+                      : 'Connecting to nearest intent serve providers in your geographical pipeline.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 z-10 self-stretch sm:self-auto justify-end">
+                <button
+                  onClick={requestPreciseLocation}
+                  className="w-full sm:w-auto bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 shrink-0"
+                >
+                  <MapPin className="w-4 h-4" />
+                  <span>{locationPermission === 'granted' ? 'Refresh GPS Pipeline' : 'Allow Precise Location'}</span>
+                </button>
+              </div>
+            </div>
+            
+            {/* Situational Category & Radius Bar */}
+            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-4 sm:p-6 border border-slate-800 shadow-xl space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border border-indigo-500/30 uppercase tracking-wider">
+                      Selected Situation
+                    </span>
+                    <span className="text-xs text-slate-400 font-semibold">
+                      {filteredIntents.length} open {filteredIntents.length === 1 ? 'intent' : 'intents'} matched
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-3 pt-1">
+                    <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                      {selectedCategory === 'All' ? 'All Intent Marketplace' : selectedCategory}
+                    </h2>
+                    <button
+                      onClick={() => setIsCategorySelectorOpen(true)}
+                      className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1 rounded-xl shadow-xs transition-all flex items-center gap-1 shrink-0"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Change Situation</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Radius Filter Pills */}
+                <div className="flex items-center gap-2 bg-slate-950/80 p-2 rounded-2xl border border-slate-800 shrink-0 self-start md:self-auto">
+                  <span className="text-xs font-bold text-slate-400 pl-2 flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-400" /> Radius:
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {[5, 15, 30, 50, 100].map(r => (
+                      <button
+                        key={r}
+                        onClick={() => setRadiusKm(r)}
+                        className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
+                          radiusKm === r
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                        }`}
+                      >
+                        {r === 100 ? 'Any km' : `${r}km`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Category Filter Chips bar */}
+              <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pt-2 border-t border-slate-800/80 text-xs">
+                <Filter className="w-4 h-4 text-indigo-400 shrink-0" />
+                <span className="text-[11px] font-bold text-slate-400 shrink-0 uppercase tracking-wider">Categories:</span>
                 {categoriesList.map((cat) => (
                   <button
                     key={cat}
                     onClick={() => setSelectedCategory(cat)}
-                    className={`px-3.5 py-1.5 rounded-xl font-bold transition-all whitespace-nowrap ${
+                    className={`px-3 py-1 rounded-xl font-bold transition-all whitespace-nowrap ${
                       selectedCategory === cat
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20 font-bold'
-                        : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                        : 'bg-slate-800/60 text-slate-300 border border-slate-700/60 hover:bg-slate-800 hover:text-white'
                     }`}
                   >
-                    {cat}
+                    {cat} ({intentsCountByCategory[cat] || 0})
                   </button>
                 ))}
               </div>
 
-              <div className="flex items-center gap-3 shrink-0">
-                <span className="text-xs text-slate-600 dark:text-slate-400 font-bold">
-                  {filteredIntents.length} Active Intents
-                </span>
-                <button
-                  onClick={() => setIsCreateIntentOpen(true)}
-                  className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold shadow-md shadow-indigo-600/20 transition-all shrink-0"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Create Intent</span>
-                </button>
+              {/* Platform Filter Chips bar */}
+              <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pt-2 border-t border-slate-800/60 text-xs">
+                <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="text-[11px] font-bold text-slate-400 shrink-0 uppercase tracking-wider">Platforms:</span>
+                {['All Platforms', 'WhatsApp', 'Telegram', 'Discord', 'Slack', 'LinkedIn', 'Web App', 'X/Twitter'].map((plat) => (
+                  <button
+                    key={plat}
+                    onClick={() => setSelectedPlatform(plat)}
+                    className={`px-2.5 py-1 rounded-xl font-bold transition-all whitespace-nowrap text-xs ${
+                      selectedPlatform === plat
+                        ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 border border-emerald-400/30'
+                        : 'bg-slate-900/80 text-slate-400 border border-slate-800 hover:bg-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {plat}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -761,6 +1497,7 @@ export default function App() {
                     onSelect={(i) => setSelectedIntentForModal(i)}
                     onStartChat={(i) => handleStartChat(i)}
                     onBoost={handleBoostIntent}
+                    onAcceptIntent={(i) => handleAcceptIntent(i, selectedPlatform === 'All Platforms' ? undefined : selectedPlatform)}
                     onDelete={handleDeleteIntent}
                   />
                 ))}
@@ -775,7 +1512,12 @@ export default function App() {
             user={user}
             threads={threads}
             messagesMap={messagesMap}
+            allUsers={registeredUsersList}
             onSendMessage={handleSendMessage}
+            onStartCall={handleInitiateCall}
+            onDeleteMessage={handleDeleteMessage}
+            onDeleteThread={handleDeleteThread}
+            onToggleBlockUser={handleToggleBlockUser}
           />
         )}
 
@@ -826,39 +1568,71 @@ export default function App() {
         }}
       />
 
+      <CategorySelectorModal
+        isOpen={isCategorySelectorOpen}
+        onClose={() => setIsCategorySelectorOpen(false)}
+        selectedCategory={selectedCategory}
+        onSelectCategory={(cat) => {
+          setSelectedCategory(cat);
+          setActiveTab('explore');
+        }}
+        radiusKm={radiusKm}
+        onRadiusChange={(r) => setRadiusKm(r)}
+        intentsCountByCategory={intentsCountByCategory}
+      />
+
       <CreateIntentModal
         isOpen={isCreateIntentOpen}
         onClose={() => setIsCreateIntentOpen(false)}
+        user={user}
         onCreateIntent={handleCreateIntent}
       />
 
       <IntentDetailModal
         intent={selectedIntentForModal}
         matches={selectedIntentForModal ? matchesMap[selectedIntentForModal.id] || [] : []}
+        currentUser={user}
         onClose={() => setSelectedIntentForModal(null)}
         onContactCandidate={(match, intent) => handleStartChat(intent, match)}
         onCreateEscrow={handleCreateEscrow}
+        onAcceptIntent={(i) => handleAcceptIntent(i, selectedPlatform === 'All Platforms' ? undefined : selectedPlatform)}
         onDeleteIntent={handleDeleteIntent}
         onStartCall={(name, avatar, title, type) => {
-          setActiveCall({
-            participantName: name,
-            participantAvatar: avatar,
-            intentTitle: title,
-            callType: type
-          });
+          if (selectedIntentForModal) {
+            const receiverId = user.id === selectedIntentForModal.creatorId
+              ? (matchesMap[selectedIntentForModal.id]?.[0]?.userId || 'usr_candidate')
+              : selectedIntentForModal.creatorId;
+            handleInitiateCall(receiverId, name, avatar, title, type);
+          } else {
+            setActiveCall({
+              participantName: name,
+              participantAvatar: avatar,
+              intentTitle: title,
+              callType: type
+            });
+          }
         }}
+      />
+
+      <IncomingCallModal
+        call={incomingCallSignal}
+        onAccept={handleAcceptCall}
+        onDecline={handleDeclineCall}
       />
 
       {activeCall && (
         <VideoCallModal
           isOpen={!!activeCall}
-          onClose={() => setActiveCall(null)}
+          onClose={handleEndCall}
           participantName={activeCall.participantName}
           participantAvatar={activeCall.participantAvatar}
           intentTitle={activeCall.intentTitle}
           userAvatar={user.avatar}
           userName={user.name}
           initialCallMode={activeCall.callType}
+          callStatus={activeCall.status}
+          isMinimized={isCallMinimized}
+          onToggleMinimize={() => setIsCallMinimized(prev => !prev)}
         />
       )}
 

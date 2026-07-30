@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Trophy, Award, MapPin, Building, GraduationCap, Flame, ShieldCheck } from 'lucide-react';
+import { Trophy, Award, MapPin, Building, GraduationCap, Flame, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import { LeaderboardItem } from '../types';
 
 interface LeaderboardViewProps {
@@ -78,7 +78,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({ items }) => {
                 <th className="py-3.5 px-4">Collaborator</th>
                 <th className="py-3.5 px-4">Location / Group</th>
                 <th className="py-3.5 px-4">Permanent Karma</th>
-                <th className="py-3.5 px-4">Trust Score</th>
+                <th className="py-3.5 px-4">Intents Served</th>
                 <th className="py-3.5 px-4">Badge</th>
               </tr>
             </thead>
@@ -136,8 +136,8 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({ items }) => {
 
                     <td className="py-3.5 px-4">
                       <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        {item.trustScore}%
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        {item.completedIntents || 12} Served
                       </span>
                     </td>
 

@@ -12,11 +12,12 @@ import {
   Loader2,
   CheckCircle2
 } from 'lucide-react';
-import { Intent, UrgencyLevel, IntentCategory } from '../types';
+import { Intent, UrgencyLevel, IntentCategory, UserProfile } from '../types';
 
 interface CreateIntentModalProps {
   isOpen: boolean;
   onClose: () => void;
+  user: UserProfile;
   onCreateIntent: (newIntent: Intent) => void;
 }
 
@@ -29,18 +30,30 @@ const PRESET_EXAMPLES = [
   "Need 5 volunteers for Ocean Beach cleanup & trash sorting this Sunday."
 ];
 
+const ALL_PLATFORMS = ['WhatsApp', 'Telegram', 'Discord', 'Slack', 'LinkedIn', 'Web App', 'X/Twitter'];
+
 export const CreateIntentModal: React.FC<CreateIntentModalProps> = ({
   isOpen,
   onClose,
+  user,
   onCreateIntent
 }) => {
   const [promptInput, setPromptInput] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [extractedIntent, setExtractedIntent] = useState<Partial<Intent> | null>(null);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(ALL_PLATFORMS);
   const [isTeamIntent, setIsTeamIntent] = useState(false);
   const [targetCount, setTargetCount] = useState(3);
 
   if (!isOpen) return null;
+
+  const togglePlatform = (plat: string) => {
+    setSelectedPlatforms(prev =>
+      prev.includes(plat)
+        ? (prev.length > 1 ? prev.filter(p => p !== plat) : prev)
+        : [...prev, plat]
+    );
+  };
 
   const handleAIParse = async (inputToParse?: string) => {
     const textToAnalyze = inputToParse || promptInput;
@@ -95,14 +108,15 @@ export const CreateIntentModal: React.FC<CreateIntentModalProps> = ({
 
     const newIntent: Intent = {
       id: `int_${Date.now()}`,
-      creatorId: 'usr_me',
-      creatorName: 'Alex Rivera',
-      creatorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
-      creatorTrustScore: 98,
-      creatorBadge: 'Elite Collaborator',
+      creatorId: user.id,
+      creatorName: user.name || 'Community Contributor',
+      creatorAvatar: user.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250',
+      creatorTrustScore: user.trustScore || 98,
+      creatorBadge: (user.badges && user.badges[0]) ? user.badges[0].name : 'Verified Member',
       title: extractedIntent?.title || promptInput.slice(0, 60),
       rawPrompt: promptInput,
       category: (extractedIntent?.category as IntentCategory) || 'Startup/Tech',
+      platforms: selectedPlatforms,
       skills: extractedIntent?.skills || ['Collaboration'],
       location: extractedIntent?.location || 'San Francisco, CA',
       distanceKm: 0.1,
@@ -261,6 +275,46 @@ export const CreateIntentModal: React.FC<CreateIntentModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* Broadcast Platforms Selection */}
+          <div className="space-y-2 p-3.5 bg-slate-950/70 rounded-xl border border-slate-800">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-indigo-400" />
+                Broadcast Across Platforms ({selectedPlatforms.length})
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedPlatforms(selectedPlatforms.length === ALL_PLATFORMS.length ? [ALL_PLATFORMS[0]] : ALL_PLATFORMS)}
+                className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold"
+              >
+                {selectedPlatforms.length === ALL_PLATFORMS.length ? 'Deselect Extra' : 'Select All Platforms'}
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              People in your chosen category will see this intent on these platforms and can accept to serve:
+            </p>
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {ALL_PLATFORMS.map((plat) => {
+                const isSelected = selectedPlatforms.includes(plat);
+                return (
+                  <button
+                    key={plat}
+                    type="button"
+                    onClick={() => togglePlatform(plat)}
+                    className={`text-xs px-2.5 py-1 rounded-lg border font-bold transition-all flex items-center gap-1 ${
+                      isSelected
+                        ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/50 shadow-xs'
+                        : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
+                    }`}
+                  >
+                    <span>{isSelected ? '✓' : '+'}</span>
+                    <span>{plat}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Team Recruitment Toggle */}
           <div className="flex items-center justify-between p-3 bg-slate-950/60 rounded-xl border border-slate-800">

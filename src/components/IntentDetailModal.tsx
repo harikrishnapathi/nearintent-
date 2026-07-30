@@ -14,30 +14,39 @@ import {
   Zap,
   Phone,
   Video,
-  Trash2
+  Trash2,
+  Globe,
+  Handshake
 } from 'lucide-react';
-import { Intent, Match } from '../types';
+import { Intent, Match, UserProfile } from '../types';
 
 interface IntentDetailModalProps {
   intent: Intent | null;
   matches: Match[];
+  currentUser?: UserProfile;
   onClose: () => void;
   onContactCandidate: (match: Match, intent: Intent) => void;
   onCreateEscrow: (intent: Intent, match: Match) => void;
   onStartCall?: (participantName: string, participantAvatar: string, intentTitle: string, callType: 'audio' | 'video') => void;
+  onAcceptIntent?: (intent: Intent) => void;
   onDeleteIntent?: (intentId: string) => void;
 }
 
 export const IntentDetailModal: React.FC<IntentDetailModalProps> = ({
   intent,
   matches,
+  currentUser,
   onClose,
   onContactCandidate,
   onCreateEscrow,
   onStartCall,
+  onAcceptIntent,
   onDeleteIntent
 }) => {
   if (!intent) return null;
+
+  const isOwner = currentUser?.id === intent.creatorId;
+  const isServing = intent.status === 'serving' || intent.status === 'accepted';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto">
@@ -82,14 +91,78 @@ export const IntentDetailModal: React.FC<IntentDetailModalProps> = ({
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-6">
           
+          {/* Hero Callout Banner */}
+          <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-indigo-950/80 border border-emerald-500/30 rounded-2xl p-5 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+            {isOwner ? (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-black px-2.5 py-0.5 rounded-full border border-indigo-500/30 uppercase tracking-wider flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5" /> Your Published Intent
+                    </span>
+                    <span className="text-xs text-slate-400 font-medium">
+                      {isServing ? `Accepted by ${intent.acceptedByUserName || 'Provider'}` : 'Broadcasting live across selected platforms'}
+                    </span>
+                  </div>
+                  <h3 className="text-lg font-extrabold text-white">Manage Candidates & Intent Status</h3>
+                  <p className="text-xs text-slate-300 max-w-xl">
+                    {isServing
+                      ? `Your intent is currently being served by ${intent.acceptedByUserName}. You can open workspace chat or initiate milestone escrow below.`
+                      : 'Review AI-matched candidate scores below, initiate chats, or create escrow agreements.'}
+                  </p>
+                </div>
+                {isServing && (
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 shrink-0">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>In Active Service</span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-black px-2.5 py-0.5 rounded-full border border-emerald-500/30 uppercase tracking-wider flex items-center gap-1">
+                      <Handshake className="w-3.5 h-3.5" /> Serve Intent
+                    </span>
+                    <span className="text-xs text-slate-400 font-medium">
+                      {isServing ? 'Intent currently active in serving mode' : 'Available across platforms in category'}
+                    </span>
+                  </div>
+                  <h3 className="text-lg font-extrabold text-white">Ready to serve this intent?</h3>
+                  <p className="text-xs text-slate-300 max-w-xl">
+                    Accepting this intent instantly connects you with <strong className="text-emerald-300">{intent.creatorName}</strong> and locks in your role as the verified provider/collaborator across selected platforms.
+                  </p>
+                </div>
+
+                {!isServing ? (
+                  <button
+                    onClick={() => {
+                      if (onAcceptIntent) onAcceptIntent(intent);
+                      onClose();
+                    }}
+                    className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-6 py-3 rounded-xl text-xs shadow-lg shadow-emerald-500/25 transition-all flex items-center justify-center gap-2 shrink-0 active:scale-95"
+                  >
+                    <Handshake className="w-4 h-4" />
+                    <span>Accept Intent to Serve</span>
+                  </button>
+                ) : (
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 shrink-0">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>Accepted & In Progress</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
           {/* Intent Overview Banner */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
             <div>
               <span className="text-slate-400 block mb-1">Creator</span>
               <div className="flex items-center gap-2">
                 <img src={intent.creatorAvatar} className="w-6 h-6 rounded-full object-cover" />
                 <span className="font-semibold text-slate-100">{intent.creatorName}</span>
-                <span className="text-emerald-400 font-bold">({intent.creatorTrustScore}%)</span>
               </div>
             </div>
 
@@ -108,6 +181,17 @@ export const IntentDetailModal: React.FC<IntentDetailModalProps> = ({
                 <Clock className="w-3.5 h-3.5 text-amber-400" />
                 {intent.availability}
               </p>
+            </div>
+
+            <div>
+              <span className="text-slate-400 block mb-1">Broadcast Platforms</span>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {(intent.platforms || ['WhatsApp', 'Telegram', 'Discord', 'Slack', 'LinkedIn', 'Web App']).map((p, idx) => (
+                  <span key={idx} className="text-[9px] font-bold bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/30">
+                    {p}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -157,7 +241,7 @@ export const IntentDetailModal: React.FC<IntentDetailModalProps> = ({
                         <p className="text-xs text-slate-400">{match.userTitle}</p>
                         <div className="flex items-center gap-3 text-[11px] text-slate-400 mt-1">
                           <span className="text-emerald-400 font-semibold flex items-center gap-0.5">
-                            <ShieldCheck className="w-3.5 h-3.5" /> {match.trustScore}% Trust
+                            <ShieldCheck className="w-3.5 h-3.5" /> Verified
                           </span>
                           <span>⚡ Resp: {match.responseTime}</span>
                           <span>📍 {match.location}</span>
@@ -198,11 +282,11 @@ export const IntentDetailModal: React.FC<IntentDetailModalProps> = ({
 
                     <div>
                       <div className="flex justify-between text-slate-400 mb-1">
-                        <span>Trust Score</span>
-                        <span className="text-amber-300 font-semibold">{match.breakdown.trust}%</span>
+                        <span>Verification</span>
+                        <span className="text-amber-300 font-semibold">100%</span>
                       </div>
                       <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
-                        <div className="h-full bg-amber-500" style={{ width: `${match.breakdown.trust}%` }} />
+                        <div className="h-full bg-amber-500" style={{ width: `100%` }} />
                       </div>
                     </div>
 

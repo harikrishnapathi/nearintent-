@@ -10,20 +10,38 @@ import {
   orderBy,
   addDoc
 } from './firebase';
-import { UserProfile, Intent, ChatMessage } from '../types';
+import { UserProfile, Intent, ChatMessage, ChatThread, CallSignal } from '../types';
 
 const USERS_COLLECTION = 'users';
 const INTENTS_COLLECTION = 'intents';
 const MESSAGES_COLLECTION = 'messages';
+const THREADS_COLLECTION = 'threads';
+const CALLS_COLLECTION = 'calls';
+
+// Helper to strip undefined values so Firestore setDoc doesn't fail
+function sanitizeForFirestore(obj: Record<string, any>): Record<string, any> {
+  const clean: Record<string, any> = {};
+  Object.keys(obj).forEach(key => {
+    if (obj[key] !== undefined) {
+      if (obj[key] !== null && typeof obj[key] === 'object' && !Array.isArray(obj[key]) && !(obj[key] instanceof Date)) {
+        clean[key] = sanitizeForFirestore(obj[key]);
+      } else {
+        clean[key] = obj[key];
+      }
+    }
+  });
+  return clean;
+}
 
 // 1. Sync User Profile to Firestore
 export async function saveUserToFirestore(user: UserProfile): Promise<void> {
   try {
     const userRef = doc(db, USERS_COLLECTION, user.id);
-    await setDoc(userRef, {
+    const data = sanitizeForFirestore({
       ...user,
       updatedAt: new Date().toISOString()
-    }, { merge: true });
+    });
+    await setDoc(userRef, data, { merge: true });
   } catch (err) {
     console.error('Firestore saveUser error:', err);
   }
@@ -92,10 +110,11 @@ export function subscribeToUsers(onUpdate: (users: UserProfile[]) => void) {
 export async function saveIntentToFirestore(intent: Intent): Promise<void> {
   try {
     const intentRef = doc(db, INTENTS_COLLECTION, intent.id);
-    await setDoc(intentRef, {
+    const data = sanitizeForFirestore({
       ...intent,
       createdAtIso: new Date().toISOString()
-    }, { merge: true });
+    });
+    await setDoc(intentRef, data, { merge: true });
   } catch (err) {
     console.error('Firestore saveIntent error:', err);
   }
@@ -120,6 +139,8 @@ export function subscribeToIntents(onUpdate: (intents: Intent[]) => void) {
       snapshot.forEach((docSnap) => {
         intents.push(docSnap.data() as Intent);
       });
+      // Sort newest first
+      intents.sort((a, b) => b.createdAt - a.createdAt);
       onUpdate(intents);
     }, (err) => {
       console.warn('Firestore subscribeToIntents error:', err);
@@ -130,39 +151,156 @@ export function subscribeToIntents(onUpdate: (intents: Intent[]) => void) {
   }
 }
 
-// 5. Save Message to Firestore
-export async function saveMessageToFirestore(intentId: string, msg: ChatMessage): Promise<void> {
+// 5. Chat Threads Sync & Listener
+export async function saveThreadToFirestore(thread: ChatThread): Promise<void> {
+  try {
+    const threadRef = doc(db, THREADS_COLLECTION, thread.id);
+    const data = sanitizeForFirestore({
+      ...thread,
+      updatedAtIso: new Date().toISOString()
+    });
+    await setDoc(threadRef, data, { merge: true });
+  } catch (err) {
+    console.error('Firestore saveThread error:', err);
+  }
+}
+
+export function subscribeToThreads(currentUserId: string, onUpdate: (threads: ChatThread[]) => void) {
+  try {
+    const q = query(collection(db, THREADS_COLLECTION));
+    return onSnapshot(q, (snapshot) => {
+      const threads: ChatThread[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as ChatThread;
+        // User is involved if participantId === currentUserId OR createdByUserId === currentUserId
+        if (data.participantId === currentUserId || data.createdByUserId === currentUserId) {
+          threads.push(data);
+        }
+      });
+      threads.sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
+      onUpdate(threads);
+    }, (err) => {
+      console.warn('Firestore subscribeToThreads error:', err);
+    });
+  } catch (err) {
+    console.error('Firestore subscribeToThreads init error:', err);
+    return () => {};
+  }
+}
+
+// 6. Save Message to Firestore
+export async function saveMessageToFirestore(msg: ChatMessage): Promise<void> {
   try {
     const msgRef = doc(db, MESSAGES_COLLECTION, msg.id);
-    await setDoc(msgRef, {
+    const data = sanitizeForFirestore({
       ...msg,
-      intentId,
       createdAtIso: new Date().toISOString()
-    }, { merge: true });
+    });
+    await setDoc(msgRef, data, { merge: true });
   } catch (err) {
     console.error('Firestore saveMessage error:', err);
   }
 }
 
-// 6. Real-time Chat Messages Listener for an Intent
-export function subscribeToMessages(intentId: string, onUpdate: (messages: ChatMessage[]) => void) {
+// Delete Single Chat Message from Firestore
+export async function deleteMessageFromFirestore(messageId: string): Promise<void> {
+  try {
+    const msgRef = doc(db, MESSAGES_COLLECTION, messageId);
+    await deleteDoc(msgRef);
+  } catch (err) {
+    console.error('Firestore deleteMessage error:', err);
+  }
+}
+
+// Delete Chat Thread & all its messages from Firestore
+export async function deleteThreadFromFirestore(threadId: string): Promise<void> {
+  try {
+    const threadRef = doc(db, THREADS_COLLECTION, threadId);
+    await deleteDoc(threadRef);
+  } catch (err) {
+    console.error('Firestore deleteThread error:', err);
+  }
+}
+
+// Real-time Chat Messages Listener for Threads
+export function subscribeToAllMessages(onUpdate: (messagesMap: Record<string, ChatMessage[]>) => void) {
   try {
     const q = query(collection(db, MESSAGES_COLLECTION));
     return onSnapshot(q, (snapshot) => {
-      const msgs: ChatMessage[] = [];
+      const map: Record<string, ChatMessage[]> = {};
       snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data.intentId === intentId) {
-          msgs.push(data as ChatMessage);
+        const data = docSnap.data() as ChatMessage;
+        if (data.threadId) {
+          if (!map[data.threadId]) map[data.threadId] = [];
+          map[data.threadId].push(data);
         }
       });
-      msgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      onUpdate(msgs);
+      Object.keys(map).forEach(tid => {
+        map[tid].sort((a, b) => a.timestamp - b.timestamp);
+      });
+      onUpdate(map);
     }, (err) => {
-      console.warn('Firestore subscribeToMessages error:', err);
+      console.warn('Firestore subscribeToAllMessages error:', err);
     });
   } catch (err) {
-    console.error('Firestore subscribeToMessages init error:', err);
+    console.error('Firestore subscribeToAllMessages init error:', err);
     return () => {};
+  }
+}
+
+// 7. Call Signals (Real-time WebRTC & Voice Calling)
+export async function saveCallSignalToFirestore(call: CallSignal): Promise<void> {
+  try {
+    const callRef = doc(db, CALLS_COLLECTION, call.id);
+    const data = sanitizeForFirestore({
+      ...call,
+      updatedAtIso: new Date().toISOString()
+    });
+    await setDoc(callRef, data, { merge: true });
+  } catch (err) {
+    console.error('Firestore saveCallSignal error:', err);
+  }
+}
+
+export function subscribeToCalls(currentUserId: string, onUpdate: (activeCalls: CallSignal[]) => void) {
+  try {
+    const q = query(collection(db, CALLS_COLLECTION));
+    return onSnapshot(q, (snapshot) => {
+      const calls: CallSignal[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as CallSignal;
+        if (data.callerId === currentUserId || data.receiverId === currentUserId) {
+          calls.push(data);
+        }
+      });
+      onUpdate(calls);
+    }, (err) => {
+      console.warn('Firestore subscribeToCalls error:', err);
+    });
+  } catch (err) {
+    console.error('Firestore subscribeToCalls init error:', err);
+    return () => {};
+  }
+}
+
+export async function updateCallSignalInFirestore(callId: string, updates: Partial<CallSignal>): Promise<void> {
+  try {
+    const callRef = doc(db, CALLS_COLLECTION, callId);
+    const data = sanitizeForFirestore({
+      ...updates,
+      updatedAtIso: new Date().toISOString()
+    });
+    await setDoc(callRef, data, { merge: true });
+  } catch (err) {
+    console.error('Firestore updateCallSignal error:', err);
+  }
+}
+
+export async function deleteCallSignalFromFirestore(callId: string): Promise<void> {
+  try {
+    const callRef = doc(db, CALLS_COLLECTION, callId);
+    await deleteDoc(callRef);
+  } catch (err) {
+    console.error('Firestore deleteCallSignal error:', err);
   }
 }

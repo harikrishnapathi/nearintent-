@@ -1,6 +1,6 @@
 export type UrgencyLevel = 'Immediate' | 'Urgent' | 'High' | 'Normal';
 export type IntentCategory = 'Startup/Tech' | 'Sports/Fitness' | 'Emergency/Health' | 'Services/Trades' | 'Co-founder/Networking' | 'Creative/Freelance' | 'Community/Help';
-export type IntentStatus = 'active' | 'fulfilled' | 'expired';
+export type IntentStatus = 'active' | 'fulfilled' | 'expired' | 'serving' | 'accepted';
 
 export interface Intent {
   id: string;
@@ -12,8 +12,11 @@ export interface Intent {
   title: string;
   rawPrompt: string;
   category: IntentCategory;
+  platforms?: string[]; // e.g. ['WhatsApp', 'Telegram', 'Discord', 'Slack', 'LinkedIn', 'Web App', 'X/Twitter']
   skills: string[];
   location: string;
+  lat?: number;
+  lng?: number;
   distanceKm: number;
   availability: string;
   budget?: string;
@@ -22,6 +25,11 @@ export interface Intent {
   createdAt: number; // timestamp
   expiresAt: number; // timestamp
   status: IntentStatus;
+  acceptedByUserId?: string;
+  acceptedByUserName?: string;
+  acceptedByAvatar?: string;
+  acceptedByPlatform?: string;
+  acceptedAt?: number;
   isTeamIntent?: boolean;
   targetCount?: number;
   filledCount?: number;
@@ -99,6 +107,7 @@ export interface UserProfile {
   noShowPenalties: number;
   cancellationPenalties: number;
   streakDays: number;
+  blockedUserIds?: string[];
 }
 
 export interface ChatMessage {
@@ -111,6 +120,8 @@ export interface ChatMessage {
   timestamp: number;
   type: 'text' | 'voice' | 'image' | 'file' | 'system';
   mediaUrl?: string;
+  fileName?: string;
+  fileSize?: string;
   voiceDurationSec?: number;
   isTranslated?: boolean;
   originalText?: string;
@@ -121,6 +132,11 @@ export interface ChatThread {
   id: string;
   intentId: string;
   intentTitle: string;
+  createdByUserId?: string;
+  createdByUserName?: string;
+  createdByUserAvatar?: string;
+  createdByTrustScore?: number;
+  createdByTitle?: string;
   participantId: string;
   participantName: string;
   participantAvatar: string;
@@ -130,6 +146,103 @@ export interface ChatThread {
   lastMessageTimestamp: number;
   unreadCount: number;
   status: 'active' | 'collaborating' | 'completed';
+}
+
+export function getOtherParticipant(
+  thread: ChatThread,
+  currentUserId: string,
+  allUsers: UserProfile[] = []
+): {
+  id: string;
+  name: string;
+  avatar: string;
+  trustScore: number;
+  title: string;
+} {
+  const isCreator =
+    (thread.createdByUserId && currentUserId === thread.createdByUserId) ||
+    (thread.createdByUserName && thread.createdByUserName.toLowerCase() === currentUserId.toLowerCase());
+
+  const isParticipant =
+    (thread.participantId && currentUserId === thread.participantId) ||
+    (thread.participantName && thread.participantName.toLowerCase() === currentUserId.toLowerCase());
+
+  if (isCreator && !isParticipant) {
+    // Current user is the Creator -> return Participant details
+    let pName = thread.participantName;
+    let pAvatar = thread.participantAvatar;
+    let pTrust = thread.participantTrustScore;
+    let pTitle = thread.participantTitle;
+
+    const foundInAll = allUsers.find(u => u.id === thread.participantId || u.name.toLowerCase() === thread.participantName.toLowerCase());
+    if (foundInAll) {
+      pName = foundInAll.name;
+      pAvatar = foundInAll.avatar;
+      pTrust = foundInAll.trustScore;
+      pTitle = foundInAll.headline;
+    }
+
+    return {
+      id: thread.participantId || 'usr_participant',
+      name: pName || 'Collaborator',
+      avatar: pAvatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250',
+      trustScore: pTrust || 98,
+      title: pTitle || 'Collaborator'
+    };
+  } else {
+    // Current user is the Participant (or viewing another creator's thread) -> return Creator details
+    const creatorId = thread.createdByUserId || 'usr_creator';
+    let cName = thread.createdByUserName;
+    let cAvatar = thread.createdByUserAvatar;
+    let cTrust = thread.createdByTrustScore;
+    let cTitle = thread.createdByTitle;
+
+    const foundInAll = allUsers.find(u => u.id === creatorId || (cName && u.name.toLowerCase() === cName.toLowerCase()));
+    if (foundInAll) {
+      cName = foundInAll.name;
+      cAvatar = foundInAll.avatar;
+      cTrust = foundInAll.trustScore;
+      cTitle = foundInAll.headline;
+    }
+
+    if (!cName) {
+      const currentMatchingUser = allUsers.find(u => u.id === currentUserId);
+      const currentUserName = currentMatchingUser ? currentMatchingUser.name.toLowerCase() : currentUserId.toLowerCase();
+      if (currentUserName.includes('sai')) {
+        cName = 'harikrishna';
+      } else if (currentUserName.includes('harikrishna')) {
+        cName = 'sai';
+      } else {
+        cName = 'Intent Poster';
+      }
+    }
+
+    return {
+      id: creatorId,
+      name: cName,
+      avatar: cAvatar || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=250',
+      trustScore: cTrust || 98,
+      title: cTitle || 'Intent Creator'
+    };
+  }
+}
+
+export interface CallSignal {
+  id: string;
+  callerId: string;
+  callerName: string;
+  callerAvatar: string;
+  receiverId: string;
+  receiverName: string;
+  receiverAvatar: string;
+  intentTitle: string;
+  type: 'audio' | 'video';
+  status: 'calling' | 'accepted' | 'declined' | 'ended';
+  offerSdp?: string;
+  answerSdp?: string;
+  callerIceCandidates?: string[];
+  receiverIceCandidates?: string[];
+  createdAt: number;
 }
 
 export interface Mission {

@@ -6,7 +6,7 @@ import { createServer as createViteServer } from "vite";
 const app = express();
 app.use(express.json());
 
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Initialize Gemini client server-side
 const ai = new GoogleGenAI({
@@ -38,6 +38,41 @@ app.post("/api/intents", (req, res) => {
     res.json({ success: true, intent });
   } catch (error: any) {
     res.status(500).json({ error: error.message || "Failed to save intent" });
+  }
+});
+
+// API Route: Accept intent to serve
+app.put("/api/intents/:id/accept", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { acceptedByUserId, acceptedByUserName, acceptedByAvatar, acceptedByPlatform } = req.body;
+    const index = registeredIntents.findIndex(i => i.id === id);
+    if (index !== -1) {
+      registeredIntents[index] = {
+        ...registeredIntents[index],
+        status: 'serving',
+        acceptedByUserId,
+        acceptedByUserName,
+        acceptedByAvatar,
+        acceptedByPlatform,
+        acceptedAt: Date.now()
+      };
+      return res.json({ success: true, intent: registeredIntents[index] });
+    }
+    return res.status(404).json({ error: "Intent not found" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to accept intent" });
+  }
+});
+
+// API Route: Delete intent
+app.delete("/api/intents/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    registeredIntents = registeredIntents.filter(i => i.id !== id);
+    res.json({ success: true, message: "Intent deleted" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to delete intent" });
   }
 });
 

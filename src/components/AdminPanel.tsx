@@ -81,9 +81,9 @@ export const AdminPanel: React.FC = () => {
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950 text-slate-400 uppercase font-semibold text-[10px]">
               <tr>
-                <th className="py-3 px-4">User</th>
-                <th className="py-3 px-4">Trust Score</th>
-                <th className="py-3 px-4">Status</th>
+                <th className="py-3.5 px-4">User</th>
+                <th className="py-3.5 px-4">Role</th>
+                <th className="py-3.5 px-4">Status</th>
                 <th className="py-3 px-4 text-right">Moderation Action</th>
               </tr>
             </thead>
@@ -91,7 +91,7 @@ export const AdminPanel: React.FC = () => {
               {usersList.map((u) => (
                 <tr key={u.id} className="hover:bg-slate-800/40 transition-colors">
                   <td className="py-3 px-4 font-bold text-slate-100">{u.name}</td>
-                  <td className="py-3 px-4 text-emerald-400 font-bold">{u.trust}%</td>
+                  <td className="py-3 px-4 text-indigo-400 font-bold">{u.role}</td>
                   <td className="py-3 px-4">
                     <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
                       u.status === 'Verified'

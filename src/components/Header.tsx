@@ -36,6 +36,9 @@ interface HeaderProps {
   notifications: NotificationItem[];
   searchQuery: string;
   setSearchQuery: (query: string) => void;
+  selectedCategory?: string;
+  radiusKm?: number;
+  onOpenCategorySelector?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -53,7 +56,10 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleTheme,
   notifications,
   searchQuery,
-  setSearchQuery
+  setSearchQuery,
+  selectedCategory = 'All',
+  radiusKm = 30,
+  onOpenCategorySelector
 }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -108,7 +114,22 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Desktop User Gamification Stats & Actions */}
           <div className="hidden lg:flex items-center gap-2 lg:gap-3">
             
-            {/* Create Intent Button */}
+            {/* Category / Situation Selector Button */}
+          {onOpenCategorySelector && (
+            <button
+              onClick={onOpenCategorySelector}
+              className="hidden sm:flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/80 border border-indigo-200 dark:border-indigo-800/80 text-indigo-700 dark:text-indigo-300 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 shadow-2xs"
+              title="Change Situation Category & Radius"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
+              <span className="truncate max-w-[130px]">{selectedCategory === 'All' ? 'All Intent Categories' : selectedCategory}</span>
+              <span className="bg-indigo-600 text-white text-[9px] font-extrabold px-1.5 py-0.5 rounded-full">
+                {radiusKm === 100 ? 'All km' : `${radiusKm}km`}
+              </span>
+            </button>
+          )}
+
+          {/* Create Intent Button */}
             <button
               onClick={onOpenCreateIntent}
               className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-indigo-600/20 transition-all transform active:scale-95"

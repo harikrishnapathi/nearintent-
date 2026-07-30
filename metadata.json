@@ -1,6 +1,6 @@
 {
   "name": "Near Intent",
-  "description": "AI-first Intent Operating System connecting humans based on real-time intent rather than static profiles with AI matching, trust scores, reputation, escrow, and intelligent collaboration.",
+  "description": "AI-first Intent Operating System connecting humans based on real-time intent across platforms with multi-platform broadcast, category filtering, intent acceptance to serve, AI matching, trust scores, escrow, and intelligent collaboration.",
   "requestFramePermissions": ["camera", "microphone", "geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

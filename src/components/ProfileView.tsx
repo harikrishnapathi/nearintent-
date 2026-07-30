@@ -113,7 +113,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <Camera className="w-6 h-6 text-white" />
             </div>
             <span className="absolute -bottom-2 -right-2 bg-emerald-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-full border-2 border-slate-900 flex items-center gap-1">
-              <ShieldCheck className="w-3 h-3" /> {user.trustScore}% TRUST
+              <ShieldCheck className="w-3 h-3" /> VERIFIED
             </span>
           </div>
 
@@ -198,12 +198,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl space-y-1 shadow-xs">
-          <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Trust Score</span>
+          <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Identity Status</span>
           <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
             <ShieldCheck className="w-6 h-6" />
-            {user.trustScore}%
+            Verified
           </div>
-          <span className="text-[10px] text-slate-500">Based on verified platform history</span>
+          <span className="text-[10px] text-slate-500">Identity & Phone Phone Verified</span>
         </div>
 
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl space-y-1 shadow-xs">
