@@ -76,10 +76,13 @@ export const Header: React.FC<HeaderProps> = ({
           
           {/* Logo & Platform Name */}
           <div className="flex items-center gap-2 cursor-pointer shrink-0" onClick={() => handleMobileNav('explore')}>
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 p-0.5 shadow-md shadow-indigo-500/20">
-              <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
-                <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-400 animate-pulse" />
-              </div>
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 p-0.5 shadow-md shadow-indigo-500/20 overflow-hidden">
+              <img
+                src="/logo.jpg"
+                alt="NearIntent Logo"
+                className="w-full h-full object-cover rounded-[10px]"
+                referrerPolicy="no-referrer"
+              />
             </div>
             <div>
               <div className="flex items-center gap-1">
