@@ -101,60 +101,19 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
     }
   };
 
-  // Web Speech Synthesis: Speaks remote voice out loud through browser speakers
-  const speakText = (text: string) => {
-    if ('speechSynthesis' in window && isSpeakerOn) {
-      try {
-        if (window.speechSynthesis.paused) {
-          window.speechSynthesis.resume();
-        }
-        window.speechSynthesis.cancel();
-        const cleanText = text.replace(/^[^:]+:\s*/, '').replace(/["']/g, '');
-        if (!cleanText.trim()) return;
-
-        const utterance = new SpeechSynthesisUtterance(cleanText);
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-        utterance.volume = 1.0;
-        utterance.lang = 'en-US';
-
-        const voices = window.speechSynthesis.getVoices();
-        if (voices && voices.length > 0) {
-          const enVoice = voices.find(v => v.lang.startsWith('en') && !v.name.includes('Google'));
-          if (enVoice) utterance.voice = enVoice;
-        }
-
-        window.speechSynthesis.speak(utterance);
-      } catch (e) {
-        console.warn('Speech synthesis error:', e);
-      }
-    }
+  // Disable artificial speech synthesis so users hear ONLY real human microphone audio
+  const speakText = (_text: string) => {
+    return;
   };
 
-  // Explicit audio unlock and test voice
+  // Explicit audio unlock
   const testSpeakerVoice = () => {
     handleUnlockAudio();
   };
 
-  // Play audio chime when remote participant speaks or connects
+  // Disabled artificial beeping sound during call
   const playIncomingVoiceBeep = () => {
-    if (!isSpeakerOn) return;
-    try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      if (ctx.state === 'suspended') {
-        ctx.resume();
-      }
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
-      gain.gain.setValueAtTime(0.08, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.25);
-    } catch (e) {}
+    return;
   };
 
   // Play continuous soft ringtone when outgoing call is ringing ('calling' state)
@@ -206,7 +165,6 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
           broadcastChannelRef.current = bc;
           bc.onmessage = (e) => {
             if (e.data && e.data.type === 'LIVE_SPEECH') {
-              playIncomingVoiceBeep();
               if (e.data.senderName !== userName) {
                 speakText(e.data.text);
               }
@@ -406,7 +364,6 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
       const speakerName = callSignal.lastSpeakerName || participantName;
       const text = callSignal.lastSpokenText;
 
-      playIncomingVoiceBeep();
       speakText(text);
 
       setTranscripts(prev => [
@@ -415,6 +372,71 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
       ]);
     }
   }, [isOpen, callSignal?.lastSpokenText, callSignal?.spokenTimestamp, currentUserId, userName, participantName]);
+
+  // Live Microphone Real Voice MediaRecorder Stream over BroadcastChannel & WebRTC
+  useEffect(() => {
+    if (!isOpen || !isMicOn || callStatus !== 'accepted') return;
+
+    let mediaRecorder: MediaRecorder | null = null;
+    let audioChunksChannel: BroadcastChannel | null = null;
+
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channelName = `near_intent_real_voice_${callSignal?.id || 'p2p'}`;
+        audioChunksChannel = new BroadcastChannel(channelName);
+
+        // Receive real human voice audio chunks from the remote participant
+        audioChunksChannel.onmessage = async (e) => {
+          if (!e.data || e.data.senderId === (currentUserId || userName)) return;
+
+          if (e.data.type === 'REAL_VOICE_CHUNK' && e.data.buffer) {
+            try {
+              const blob = new Blob([e.data.buffer], { type: 'audio/webm;codecs=opus' });
+              const audioUrl = URL.createObjectURL(blob);
+              const chunkAudio = new Audio(audioUrl);
+              chunkAudio.volume = isSpeakerOn ? 1.0 : 0.0;
+              await chunkAudio.play().catch(() => {});
+            } catch (err) {}
+          }
+        };
+
+        // Record local microphone in real-time chunks (250ms) to stream to remote participant
+        if (mediaStreamRef.current) {
+          const audioTracks = mediaStreamRef.current.getAudioTracks();
+          if (audioTracks.length > 0) {
+            const audioStream = new MediaStream(audioTracks);
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+              ? 'audio/webm;codecs=opus'
+              : 'audio/webm';
+
+            mediaRecorder = new MediaRecorder(audioStream, { mimeType });
+            mediaRecorder.ondataavailable = async (event) => {
+              if (event.data && event.data.size > 0 && audioChunksChannel) {
+                const arrayBuffer = await event.data.arrayBuffer();
+                audioChunksChannel.postMessage({
+                  type: 'REAL_VOICE_CHUNK',
+                  senderId: currentUserId || userName,
+                  buffer: arrayBuffer
+                });
+              }
+            };
+            mediaRecorder.start(250);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Real voice media stream error:', err);
+    }
+
+    return () => {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        try { mediaRecorder.stop(); } catch (e) {}
+      }
+      if (audioChunksChannel) {
+        audioChunksChannel.close();
+      }
+    };
+  }, [isOpen, isMicOn, isSpeakerOn, callStatus, callSignal?.id, currentUserId, userName]);
 
   // Real WebRTC P2P Audio Connection between 2 physical devices
   useEffect(() => {

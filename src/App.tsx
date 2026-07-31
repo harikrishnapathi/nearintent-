@@ -317,15 +317,30 @@ export default function App() {
         if (!e.data) return;
         if (e.data.type === 'CALL_INITIATED' && e.data.callSignal) {
           const sig = e.data.callSignal;
-          if (sig.receiverId === user.id && sig.status === 'calling') {
+          const uId = user.id.toLowerCase();
+          const uName = user.name.toLowerCase();
+          const rId = (sig.receiverId || '').toLowerCase();
+          const rName = (sig.receiverName || '').toLowerCase();
+          const cId = (sig.callerId || '').toLowerCase();
+
+          if ((rId === uId || (rName === uName && rName !== '')) && cId !== uId && sig.status === 'calling') {
             setIncomingCallSignal(sig);
           }
         } else if (e.data.type === 'CALL_ACCEPTED' && e.data.callSignal) {
           const sig = e.data.callSignal;
-          if (sig.callerId === user.id || sig.receiverId === user.id) {
+          const uId = user.id.toLowerCase();
+          const uName = user.name.toLowerCase();
+          const cId = (sig.callerId || '').toLowerCase();
+          const cName = (sig.callerName || '').toLowerCase();
+          const rId = (sig.receiverId || '').toLowerCase();
+          const rName = (sig.receiverName || '').toLowerCase();
+
+          const isCaller = cId === uId || (cName === uName && cName !== '');
+          const isReceiver = rId === uId || (rName === uName && rName !== '');
+
+          if (isCaller || isReceiver) {
             setIncomingCallSignal(null);
             setActiveCallSignal(sig);
-            const isCaller = sig.callerId === user.id;
             setActiveCall({
               participantName: isCaller ? sig.receiverName : sig.callerName,
               participantAvatar: isCaller ? sig.receiverAvatar : sig.callerAvatar,
@@ -335,6 +350,7 @@ export default function App() {
             });
           }
         } else if (e.data.type === 'CALL_ENDED') {
+          setIncomingCallSignal(null);
           setActiveCallSignal(null);
           setActiveCall(null);
         }
@@ -360,22 +376,28 @@ export default function App() {
     });
 
     const unsubCalls = subscribeToCalls(user.id, user.name, (fsCalls) => {
-      const isMeReceiver = (c: CallSignal) => {
-        if (!user) return false;
-        const uId = (user.id || '').toLowerCase();
-        const uName = (user.name || '').toLowerCase();
-        const recId = (c.receiverId || '').toLowerCase();
-        const recName = (c.receiverName || '').toLowerCase();
-        return recId === uId || recName === uName || (recId && recId.includes(uId)) || (recName && recName.includes(uName));
-      };
-
       const isMeCaller = (c: CallSignal) => {
         if (!user) return false;
-        const uId = (user.id || '').toLowerCase();
-        const uName = (user.name || '').toLowerCase();
-        const calId = (c.callerId || '').toLowerCase();
-        const calName = (c.callerName || '').toLowerCase();
-        return calId === uId || calName === uName || (calId && calId.includes(uId)) || (calName && calName.includes(uName));
+        const uId = (user.id || '').trim().toLowerCase();
+        const uName = (user.name || '').trim().toLowerCase();
+        const calId = (c.callerId || '').trim().toLowerCase();
+        const calName = (c.callerName || '').trim().toLowerCase();
+        const recId = (c.receiverId || '').trim().toLowerCase();
+
+        const matchesCaller = (uId !== '' && calId === uId) || (uName !== '' && calName === uName);
+        return matchesCaller && calId !== recId;
+      };
+
+      const isMeReceiver = (c: CallSignal) => {
+        if (!user) return false;
+        const uId = (user.id || '').trim().toLowerCase();
+        const uName = (user.name || '').trim().toLowerCase();
+        const recId = (c.receiverId || '').trim().toLowerCase();
+        const recName = (c.receiverName || '').trim().toLowerCase();
+        const calId = (c.callerId || '').trim().toLowerCase();
+
+        const matchesReceiver = (uId !== '' && recId === uId) || (uName !== '' && recName === uName);
+        return matchesReceiver && calId !== uId;
       };
 
       // 1. Incoming Call Signal: User is recipient, not caller, status is 'calling'

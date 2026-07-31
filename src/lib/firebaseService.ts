@@ -282,8 +282,8 @@ export function subscribeToCalls(
         const receiverName = (data.receiverName || '').toLowerCase();
 
         const matchesUser =
-          (cId && (callerId === cId || receiverId === cId || callerId.includes(cId) || receiverId.includes(cId))) ||
-          (cName && (callerName === cName || receiverName === cName || callerName.includes(cName) || receiverName.includes(cName)));
+          (cId !== '' && (callerId === cId || receiverId === cId)) ||
+          (cName !== '' && (callerName === cName || receiverName === cName));
 
         if (matchesUser) {
           calls.push(data);
