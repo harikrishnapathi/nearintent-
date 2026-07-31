@@ -258,14 +258,34 @@ export async function saveCallSignalToFirestore(call: CallSignal): Promise<void>
   }
 }
 
-export function subscribeToCalls(currentUserId: string, onUpdate: (activeCalls: CallSignal[]) => void) {
+export function subscribeToCalls(
+  currentUserId: string,
+  currentUserName: string | undefined,
+  onUpdate: (activeCalls: CallSignal[]) => void
+) {
   try {
     const q = query(collection(db, CALLS_COLLECTION));
     return onSnapshot(q, (snapshot) => {
       const calls: CallSignal[] = [];
+      const now = Date.now();
+      const cName = (currentUserName || '').toLowerCase();
+      const cId = (currentUserId || '').toLowerCase();
+
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as CallSignal;
-        if (data.callerId === currentUserId || data.receiverId === currentUserId) {
+        // Ignore calls older than 1 hour
+        if (data.createdAt && (now - data.createdAt > 3600000)) return;
+
+        const callerId = (data.callerId || '').toLowerCase();
+        const receiverId = (data.receiverId || '').toLowerCase();
+        const callerName = (data.callerName || '').toLowerCase();
+        const receiverName = (data.receiverName || '').toLowerCase();
+
+        const matchesUser =
+          (cId && (callerId === cId || receiverId === cId || callerId.includes(cId) || receiverId.includes(cId))) ||
+          (cName && (callerName === cName || receiverName === cName || callerName.includes(cName) || receiverName.includes(cName)));
+
+        if (matchesUser) {
           calls.push(data);
         }
       });

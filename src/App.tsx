@@ -359,18 +359,40 @@ export default function App() {
       setMessagesMap(fsMessagesMap);
     });
 
-    const unsubCalls = subscribeToCalls(user.id, (fsCalls) => {
-      const incoming = fsCalls.find(c => c.receiverId === user.id && c.status === 'calling');
+    const unsubCalls = subscribeToCalls(user.id, user.name, (fsCalls) => {
+      const isMeReceiver = (c: CallSignal) => {
+        if (!user) return false;
+        const uId = (user.id || '').toLowerCase();
+        const uName = (user.name || '').toLowerCase();
+        const recId = (c.receiverId || '').toLowerCase();
+        const recName = (c.receiverName || '').toLowerCase();
+        return recId === uId || recName === uName || (recId && recId.includes(uId)) || (recName && recName.includes(uName));
+      };
+
+      const isMeCaller = (c: CallSignal) => {
+        if (!user) return false;
+        const uId = (user.id || '').toLowerCase();
+        const uName = (user.name || '').toLowerCase();
+        const calId = (c.callerId || '').toLowerCase();
+        const calName = (c.callerName || '').toLowerCase();
+        return calId === uId || calName === uName || (calId && calId.includes(uId)) || (calName && calName.includes(uName));
+      };
+
+      // 1. Incoming Call Signal: User is recipient, not caller, status is 'calling'
+      const incoming = fsCalls.find(c => isMeReceiver(c) && !isMeCaller(c) && c.status === 'calling');
       setIncomingCallSignal(incoming || null);
 
+      // 2. Active Call Signal:
+      // If caller -> active when 'calling' or 'accepted'
+      // If receiver -> active ONLY when 'accepted'
       const active = fsCalls.find(c =>
-        (c.callerId === user.id && (c.status === 'calling' || c.status === 'accepted')) ||
-        (c.receiverId === user.id && c.status === 'accepted')
+        (isMeCaller(c) && (c.status === 'calling' || c.status === 'accepted')) ||
+        (isMeReceiver(c) && c.status === 'accepted')
       );
 
       if (active) {
         setActiveCallSignal(active);
-        const isCaller = active.callerId === user.id;
+        const isCaller = isMeCaller(active);
         setActiveCall({
           participantName: isCaller ? active.receiverName : active.callerName,
           participantAvatar: isCaller ? active.receiverAvatar : active.callerAvatar,
@@ -394,7 +416,7 @@ export default function App() {
       unsubMsgs();
       unsubCalls();
     };
-  }, [user?.id, activeCallSignal?.id]);
+  }, [user?.id, user?.name, activeCallSignal?.id]);
 
   const [missions, setMissions] = useState<Mission[]>([
     {

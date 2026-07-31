@@ -31,7 +31,6 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { ChatThread, ChatMessage, UserProfile, getOtherParticipant } from '../types';
-import { VideoCallModal } from './VideoCallModal';
 
 interface ChatViewProps {
   user: UserProfile;
@@ -912,20 +911,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
           </div>
         </div>
-      )}
-
-      {/* Call System Modal */}
-      {activeThread && activeOtherParticipant && (
-        <VideoCallModal
-          isOpen={isVideoModalOpen}
-          onClose={() => setIsVideoModalOpen(false)}
-          participantName={activeOtherParticipant.name}
-          participantAvatar={activeOtherParticipant.avatar}
-          intentTitle={activeThread.intentTitle}
-          userAvatar={user.avatar}
-          userName={user.name}
-          initialCallMode={callMode}
-        />
       )}
 
     </div>
