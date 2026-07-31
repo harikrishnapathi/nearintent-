@@ -523,7 +523,56 @@ export default function App() {
 
   // Precise Geolocation Pipeline State
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [userAreaName, setUserAreaName] = useState<string>(() => {
+    return localStorage.getItem('near_intent_user_area') || '';
+  });
   const [locationPermission, setLocationPermission] = useState<'prompt' | 'requesting' | 'granted' | 'denied'>('prompt');
+
+  // Reverse Geocoding Helper to fetch area/place name from GPS coordinates
+  const fetchAreaName = React.useCallback(async (lat: number, lng: number) => {
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`);
+      if (res.ok) {
+        const data = await res.json();
+        const addr = data.address || {};
+        const area = addr.suburb || addr.neighbourhood || addr.residential || addr.district || addr.city_district || addr.town || addr.city || addr.village;
+        const region = addr.city || addr.town || addr.county || addr.state_district || addr.state;
+
+        let formattedArea = '';
+        if (area && region && area !== region) {
+          formattedArea = `${area}, ${region}`;
+        } else if (area) {
+          formattedArea = area;
+        } else if (region) {
+          formattedArea = region;
+        } else if (data.display_name) {
+          formattedArea = data.display_name.split(',').slice(0, 2).join(',').trim();
+        }
+
+        if (formattedArea) {
+          setUserAreaName(formattedArea);
+          localStorage.setItem('near_intent_user_area', formattedArea);
+          setUser(prev => ({
+            ...prev,
+            location: formattedArea
+          }));
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Reverse geocoding error:', e);
+    }
+
+    // Smart fallback based on coordinates if network or API fails
+    let fallback = 'Nearby Local Area';
+    if (Math.abs(lat - 18.8757) < 0.2 && Math.abs(lng - 79.4499) < 0.2) {
+      fallback = 'Mancherial, Telangana';
+    } else if (Math.abs(lat - 17.385) < 0.5 && Math.abs(lng - 78.486) < 0.5) {
+      fallback = 'Hyderabad, Telangana';
+    }
+    setUserAreaName(fallback);
+    setUser(prev => ({ ...prev, location: fallback }));
+  }, []);
 
   // Haversine distance calculator in kilometers
   const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -557,13 +606,8 @@ export default function App() {
         setUserCoords({ lat, lng });
         setLocationPermission('granted');
 
-        const locString = `GPS (${lat.toFixed(3)}, ${lng.toFixed(3)})`;
-
-        // Update current user location
-        setUser(prev => ({
-          ...prev,
-          location: locString
-        }));
+        // Fetch area/place name asynchronously
+        fetchAreaName(lat, lng);
 
         // Dynamically calculate distance for all active intents and sort by nearest proximity
         setIntents(prevIntents => {
@@ -598,7 +642,7 @@ export default function App() {
         maximumAge: 0
       }
     );
-  }, []);
+  }, [fetchAreaName]);
 
   // Auto trigger location request as soon as app opens
   React.useEffect(() => {
@@ -1357,10 +1401,20 @@ export default function App() {
                       {locationPermission === 'granted' ? '📍 GPS Pipeline Active' : locationPermission === 'requesting' ? '⌛ Requesting GPS...' : '⚠️ Location Required'}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-300 font-medium mt-0.5">
-                    {userCoords
-                      ? `GPS: ${userCoords.lat.toFixed(4)}, ${userCoords.lng.toFixed(4)} — Connected to nearest intent serve people in real-time.`
-                      : 'Connecting to nearest intent serve providers in your geographical pipeline.'}
+                  <p className="text-xs text-slate-300 font-medium mt-1 flex items-center gap-1.5 flex-wrap">
+                    {userCoords ? (
+                      <>
+                        <span className="font-extrabold text-amber-300 bg-amber-400/15 border border-amber-400/30 px-2.5 py-0.5 rounded-lg text-xs shadow-xs">
+                          📍 {userAreaName || 'Locating Area...'}
+                        </span>
+                        <span className="text-slate-400 text-[11px] font-mono">
+                          (GPS: {userCoords.lat.toFixed(4)}, {userCoords.lng.toFixed(4)})
+                        </span>
+                        <span>— Connected to nearest intent serve people in real-time.</span>
+                      </>
+                    ) : (
+                      'Connecting to nearest intent serve providers in your geographical pipeline.'
+                    )}
                   </p>
                 </div>
               </div>
@@ -1377,11 +1431,11 @@ export default function App() {
             </div>
             
             {/* Situational Category & Radius Bar */}
-            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-4 sm:p-6 border border-slate-800 shadow-xl space-y-4">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-4 sm:p-6 border border-slate-800 shadow-xl space-y-4 overflow-hidden max-w-full">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 max-w-full">
                 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border border-indigo-500/30 uppercase tracking-wider">
                       Selected Situation
                     </span>
@@ -1390,8 +1444,8 @@ export default function App() {
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-3 pt-1">
-                    <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                  <div className="flex items-center gap-2 sm:gap-3 pt-1 flex-wrap">
+                    <h2 className="text-lg sm:text-2xl font-black text-white tracking-tight break-words">
                       {selectedCategory === 'All' ? 'All Intent Marketplace' : selectedCategory}
                     </h2>
                     <button
@@ -1405,16 +1459,16 @@ export default function App() {
                 </div>
 
                 {/* Radius Filter Pills */}
-                <div className="flex items-center gap-2 bg-slate-950/80 p-2 rounded-2xl border border-slate-800 shrink-0 self-start md:self-auto">
-                  <span className="text-xs font-bold text-slate-400 pl-2 flex items-center gap-1">
+                <div className="flex items-center gap-2 bg-slate-950/80 p-2 rounded-2xl border border-slate-800 max-w-full overflow-x-auto scrollbar-none self-start md:self-auto">
+                  <span className="text-xs font-bold text-slate-400 pl-1.5 flex items-center gap-1 shrink-0">
                     <MapPin className="w-3.5 h-3.5 text-indigo-400" /> Radius:
                   </span>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 shrink-0">
                     {[5, 15, 30, 50, 100].map(r => (
                       <button
                         key={r}
                         onClick={() => setRadiusKm(r)}
-                        className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
+                        className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap ${
                           radiusKm === r
                             ? 'bg-indigo-600 text-white shadow-xs'
                             : 'text-slate-400 hover:text-white hover:bg-slate-800'

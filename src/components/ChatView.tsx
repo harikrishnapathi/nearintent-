@@ -274,8 +274,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-2 sm:px-6 lg:px-8 py-4 sm:py-6 h-[calc(100vh-140px)] min-h-[500px] w-full max-w-full">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl h-full flex overflow-hidden shadow-xl w-full">
+    <div className="max-w-7xl mx-auto px-2 sm:px-6 lg:px-8 py-2 sm:py-6 h-[calc(100vh-120px)] sm:h-[calc(100vh-140px)] min-h-[450px] w-full max-w-full overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl h-full flex overflow-hidden shadow-xl w-full max-w-full">
         
         {/* Hidden File Inputs */}
         <input
@@ -364,16 +364,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         {/* Right Area: Active Chat Window */}
         {activeThread && activeOtherParticipant ? (
-          <div className={`flex-1 flex flex-col bg-white dark:bg-slate-900 ${
+          <div className={`flex-1 flex flex-col bg-white dark:bg-slate-900 min-w-0 overflow-hidden ${
             !mobileShowThreadList ? 'flex' : 'hidden md:flex'
           }`}>
             
             {/* Active Thread Header */}
-            <div className="p-3.5 sm:p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-900/90 flex items-center justify-between gap-2 relative z-10">
-              <div className="flex items-center gap-2.5 min-w-0">
+            <div className="p-3.5 sm:p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-900/90 flex items-center justify-between gap-2 relative z-10 max-w-full overflow-hidden">
+              <div className="flex items-center gap-2.5 min-w-0 flex-1 overflow-hidden">
                 <button
                   onClick={() => setMobileShowThreadList(true)}
-                  className="md:hidden p-1.5 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                  className="md:hidden p-1.5 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 shrink-0"
                   title="Back to threads"
                 >
                   <ArrowLeft className="w-4 h-4" />
@@ -390,7 +390,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     </span>
                   )}
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1 overflow-hidden">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <h3 className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm truncate">{activeOtherParticipant.name}</h3>
                     <span className="text-[9px] sm:text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
@@ -532,28 +532,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </div>
 
             {/* Messages Scroll Area */}
-            <div className="flex-1 p-3 sm:p-4 overflow-y-auto space-y-4">
+            <div className="flex-1 p-3 sm:p-4 overflow-y-auto space-y-4 max-w-full overflow-x-hidden">
               {activeMessages.map((msg) => {
                 const isMe = msg.senderId === user.id;
                 return (
                   <div
                     key={msg.id}
-                    className={`flex items-start gap-2 sm:gap-2.5 group relative ${isMe ? 'flex-row-reverse' : 'flex-row'}`}
+                    className={`flex items-start gap-2 sm:gap-2.5 group relative max-w-full overflow-hidden ${isMe ? 'flex-row-reverse' : 'flex-row'}`}
                   >
                     <img
                       src={msg.senderAvatar}
                       alt={msg.senderName}
                       className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover border border-slate-300 dark:border-slate-700 mt-1 shrink-0"
                     />
-                    <div className={`max-w-[85%] sm:max-w-[75%] space-y-1 ${isMe ? 'items-end text-right' : 'items-start'}`}>
+                    <div className={`max-w-[85%] sm:max-w-[75%] space-y-1 min-w-0 ${isMe ? 'items-end text-right' : 'items-start'}`}>
                       <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 px-1">
-                        <span className="font-semibold text-slate-700 dark:text-slate-300">{msg.senderName}</span>
-                        <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        <span className="font-semibold text-slate-700 dark:text-slate-300 truncate">{msg.senderName}</span>
+                        <span className="shrink-0">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
 
-                      <div className="relative group/bubble flex items-center gap-1.5">
+                      <div className="relative group/bubble flex items-center gap-1.5 max-w-full overflow-hidden">
                         <div
-                          className={`p-3 sm:p-3.5 rounded-2xl text-xs leading-relaxed ${
+                          className={`p-3 sm:p-3.5 rounded-2xl text-xs leading-relaxed break-words [word-break:break-word] max-w-full overflow-hidden ${
                             isMe
                               ? 'bg-indigo-600 text-white rounded-tr-none'
                               : 'bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-tl-none shadow-xs'
@@ -561,7 +561,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         >
                           {/* Voice Note Player */}
                           {msg.type === 'voice' ? (
-                            <div className="flex items-center gap-3 font-medium min-w-[200px]">
+                            <div className="flex items-center gap-3 font-medium min-w-[180px] max-w-full overflow-hidden">
                               <button
                                 onClick={() => handleTogglePlayVoice(msg.id, msg.mediaUrl)}
                                 className={`p-2 rounded-full transition-all shrink-0 ${
@@ -575,7 +575,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                   <Play className="w-4 h-4 fill-current ml-0.5" />
                                 )}
                               </button>
-                              <div className="flex-1 space-y-1">
+                              <div className="flex-1 space-y-1 min-w-0">
                                 <div className="flex items-center justify-between text-[10px] opacity-90">
                                   <span>🎙️ Voice Message</span>
                                   <span>{msg.voiceDurationSec ? `${msg.voiceDurationSec}s` : '0:05'}</span>
@@ -595,7 +595,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                             </div>
                           ) : msg.type === 'image' ? (
                             /* Photo / Image Attachment */
-                            <div className="space-y-2">
+                            <div className="space-y-2 max-w-full overflow-hidden">
                               {msg.mediaUrl ? (
                                 <div
                                   onClick={() => setPreviewImageUrl(msg.mediaUrl!)}
@@ -611,11 +611,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                   </div>
                                 </div>
                               ) : null}
-                              <p className="text-xs font-medium">{msg.text}</p>
+                              <p className="text-xs font-medium break-words [word-break:break-word] whitespace-pre-wrap">{msg.text}</p>
                             </div>
                           ) : msg.type === 'file' ? (
                             /* Pin / File Attachment Card */
-                            <div className="space-y-2">
+                            <div className="space-y-2 max-w-full overflow-hidden">
                               <div className={`p-2.5 rounded-xl border flex items-center gap-3 ${
                                 isMe ? 'bg-indigo-700/80 border-indigo-500 text-white' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
                               }`}>
@@ -642,7 +642,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                             </div>
                           ) : (
                             /* Standard Text */
-                            <p>{msg.text}</p>
+                            <p className="break-words [word-break:break-word] whitespace-pre-wrap">{msg.text}</p>
                           )}
 
                           {isTranslating && !isMe && (
