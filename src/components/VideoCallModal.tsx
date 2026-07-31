@@ -214,11 +214,17 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
     let animationFrameId: number;
 
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ video: callMode === 'video' && isVideoOn, audio: true })
+      const wantVideo = (callMode === 'video' || isVideoOn);
+      navigator.mediaDevices.getUserMedia({ video: wantVideo, audio: true })
+        .catch(() => navigator.mediaDevices.getUserMedia({ video: false, audio: true }))
         .then((stream) => {
+          if (!stream) return;
           mediaStreamRef.current = stream;
-          if (videoRef.current && callMode === 'video') {
-            videoRef.current.srcObject = stream;
+          if (videoRef.current) {
+            try {
+              videoRef.current.srcObject = stream;
+              videoRef.current.play().catch(() => {});
+            } catch (e) {}
           }
 
           // Dynamically attach or replace local tracks on RTCPeerConnection if active
@@ -283,6 +289,18 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
       }
     };
   }, [isOpen, callMode, isVideoOn, isMicOn]);
+
+  // Sync Local Video Element with local mediaStreamRef
+  useEffect(() => {
+    if (videoRef.current && mediaStreamRef.current && (isVideoOn || callMode === 'video')) {
+      try {
+        if (videoRef.current.srcObject !== mediaStreamRef.current) {
+          videoRef.current.srcObject = mediaStreamRef.current;
+        }
+        videoRef.current.play().catch(() => {});
+      } catch (e) {}
+    }
+  }, [isOpen, callMode, isVideoOn, isMinimized]);
 
   // Real Speech Recognition (Speech-to-Text) on User Microphone
   useEffect(() => {
