@@ -16,7 +16,10 @@ import {
   Users,
   Upload,
   Camera,
-  AlertCircle
+  AlertCircle,
+  Trash2,
+  Search,
+  LogIn
 } from 'lucide-react';
 import { UserProfile } from '../types';
 import { DEFAULT_AVATAR } from '../mockData';
@@ -25,10 +28,12 @@ import { saveUserToFirestore, checkDuplicateUserInFirestore } from '../lib/fireb
 interface UserAuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  registeredUsers: UserProfile[];
+  registeredUsers: UserProfile[]; // Accounts saved on this device
+  allNetworkUsers?: UserProfile[]; // All network accounts
   activeUser: UserProfile;
   onSelectUser: (user: UserProfile) => void;
   onRegisterNewUser: (newUser: UserProfile) => void;
+  onRemoveUserFromDevice?: (userId: string) => void;
 }
 
 const PRESET_AVATARS = [
@@ -43,15 +48,21 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
   isOpen,
   onClose,
   registeredUsers,
+  allNetworkUsers = [],
   activeUser,
   onSelectUser,
-  onRegisterNewUser
+  onRegisterNewUser,
+  onRemoveUserFromDevice
 }) => {
-  const [tab, setTab] = useState<'switch' | 'register'>('register');
+  const [tab, setTab] = useState<'switch' | 'signin' | 'register'>('switch');
   const [step, setStep] = useState<number>(1);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Form State
+  // Sign In Form State
+  const [loginQuery, setLoginQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+
+  // Register Form State
   const [name, setName] = useState('');
   const [headline, setHeadline] = useState('');
   const [bio, setBio] = useState('');
@@ -89,31 +100,88 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
   if (!isOpen) return null;
 
   // Helper to validate duplicates locally and in Firestore
-  const validateDuplicates = async (phoneToCheck?: string, govIdToCheck?: string): Promise<string | null> => {
-    // 1. Check local registeredUsers prop
+  const validateDuplicates = async (nameToCheck?: string, phoneToCheck?: string, govIdToCheck?: string): Promise<string | null> => {
+    const combined = [...registeredUsers, ...allNetworkUsers];
+
+    // Check duplicate account name
+    if (nameToCheck && nameToCheck.trim()) {
+      const cleanName = nameToCheck.trim().toLowerCase();
+      const found = combined.find(u => u.name && u.name.trim().toLowerCase() === cleanName);
+      if (found) {
+        return `An account named "${found.name}" already exists. Each person can only hold one account with a unique name. Please choose a different name or sign in.`;
+      }
+    }
+
+    // Check duplicate phone
     if (phoneToCheck && phoneToCheck.trim()) {
       const cleanPhone = phoneToCheck.replace(/\D/g, "");
       if (cleanPhone.length >= 5) {
-        const found = registeredUsers.find(u => u.phoneNumber && u.phoneNumber.replace(/\D/g, "") === cleanPhone);
+        const found = combined.find(u => u.phoneNumber && u.phoneNumber.replace(/\D/g, "") === cleanPhone);
         if (found) {
-          return `An account (${found.name}) already exists with phone number ${phoneToCheck}. A single person cannot create multiple accounts with the same phone number.`;
+          return `An account (${found.name}) already exists with phone number ${phoneToCheck}. One person cannot create multiple accounts with the same phone number.`;
         }
       }
     }
 
+    // Check duplicate Gov ID
     if (govIdToCheck && govIdToCheck.trim()) {
       const cleanGovId = govIdToCheck.trim().toUpperCase();
-      const found = registeredUsers.find(u => u.governmentId && u.governmentId.trim().toUpperCase() === cleanGovId);
+      const found = combined.find(u => u.governmentId && u.governmentId.trim().toUpperCase() === cleanGovId);
       if (found) {
-        return `An account (${found.name}) already exists with Government ID ${govIdToCheck}. A single person cannot create multiple accounts with the same Government ID.`;
+        return `An account (${found.name}) already exists with Government ID ${govIdToCheck}. One person cannot create multiple accounts with the same Government ID.`;
       }
     }
 
-    // 2. Check Firestore database
-    const fsError = await checkDuplicateUserInFirestore(phoneToCheck, govIdToCheck);
+    // Check Firestore database
+    const fsError = await checkDuplicateUserInFirestore(nameToCheck, phoneToCheck, govIdToCheck);
     if (fsError) return fsError;
 
     return null;
+  };
+
+  // Sign In handler
+  const handleSignIn = async () => {
+    setErrorMsg(null);
+    if (!loginQuery.trim()) {
+      setErrorMsg('Please enter your account name or phone number');
+      return;
+    }
+
+    setIsSearching(true);
+    const queryClean = loginQuery.trim().toLowerCase();
+    const phoneClean = loginQuery.replace(/\D/g, "");
+
+    // 1. Search local & network memory
+    const combined = [...registeredUsers, ...allNetworkUsers];
+    let matched = combined.find(u =>
+      (u.name && u.name.trim().toLowerCase() === queryClean) ||
+      (phoneClean.length >= 5 && u.phoneNumber && u.phoneNumber.replace(/\D/g, "") === phoneClean)
+    );
+
+    // 2. Query Express Backend API if not found
+    if (!matched) {
+      try {
+        const res = await fetch('/api/users');
+        const data = await res.json();
+        if (data && data.success && Array.isArray(data.users)) {
+          matched = data.users.find((u: any) =>
+            (u.name && u.name.trim().toLowerCase() === queryClean) ||
+            (phoneClean.length >= 5 && u.phoneNumber && u.phoneNumber.replace(/\D/g, "") === phoneClean)
+          );
+        }
+      } catch (e) {
+        console.warn('Sign-in API fetch offline:', e);
+      }
+    }
+
+    setIsSearching(false);
+
+    if (matched) {
+      onSelectUser(matched);
+      onClose();
+    } else {
+      setErrorMsg(`No account found matching "${loginQuery}". Check spelling or create a new account.`);
+    }
   };
 
   const handleSendOtp = async () => {
@@ -123,8 +191,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       return;
     }
 
-    // Duplicate Phone Check
-    const dupErr = await validateDuplicates(phoneNumber, undefined);
+    const dupErr = await validateDuplicates(undefined, phoneNumber, undefined);
     if (dupErr) {
       setErrorMsg(dupErr);
       return;
@@ -150,8 +217,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       return;
     }
 
-    // Duplicate Government ID Check
-    const dupErr = await validateDuplicates(undefined, governmentId);
+    const dupErr = await validateDuplicates(undefined, undefined, governmentId);
     if (dupErr) {
       setErrorMsg(dupErr);
       return;
@@ -190,8 +256,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       return;
     }
 
-    // Check duplicates before proceeding
-    const dupErr = await validateDuplicates(phoneNumber, governmentId);
+    const dupErr = await validateDuplicates(name.trim(), phoneNumber, governmentId);
     if (dupErr) {
       setErrorMsg(dupErr);
       return;
@@ -253,20 +318,27 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
         levelName: rawUser.levelName || 'Explorer',
         levelNumber: rawUser.levelNumber || 1,
         responseTime: rawUser.responseTime || '< 15 mins',
-        completedIntents: rawUser.completedIntents || 0,
-        successRate: rawUser.successRate || 100,
+        completedIntents: 0,
+        successRate: 100,
         location: rawUser.location || location.trim() || 'San Francisco, CA',
-        languages: rawUser.languages || ['English'],
-        skills: Array.isArray(rawUser.skills) && rawUser.skills.length > 0 ? rawUser.skills : (skillsArray.length > 0 ? skillsArray : ['Collaboration']),
-        experience: Array.isArray(rawUser.experience) ? rawUser.experience : [],
-        portfolio: Array.isArray(rawUser.portfolio) ? rawUser.portfolio : [],
-        badges: Array.isArray(rawUser.badges) && rawUser.badges.length > 0 ? rawUser.badges : [
-          { id: `b_${Date.now()}`, name: 'Verified Member', iconName: 'ShieldCheck', description: 'Passed identity & trust checks', color: 'emerald', earnedAt: 'Just Now' }
+        languages: ['English'],
+        skills: skillsArray.length > 0 ? skillsArray : ['General'],
+        experience: [],
+        portfolio: [],
+        badges: [
+          {
+            id: `b_${Date.now()}`,
+            name: 'Verified Member',
+            iconName: 'ShieldCheck',
+            description: 'Passed real identity & phone checks',
+            color: 'emerald',
+            earnedAt: 'Just Now'
+          }
         ],
-        verificationStatus: rawUser.verificationStatus || {
-          identity: identityVerified,
-          phone: phoneVerified,
-          skillVerified: skillVerified
+        verificationStatus: {
+          identity: !!identityVerified,
+          phone: !!phoneVerified,
+          skillVerified: !!skillVerified
         },
         noShowPenalties: 0,
         cancellationPenalties: 0,
@@ -276,30 +348,29 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       await saveUserToFirestore(fullUserProfile);
       onRegisterNewUser(fullUserProfile);
       onClose();
-    } catch (err) {
-      console.error('Registration error:', err);
-      setErrorMsg('Failed to process registration. Please try again.');
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to complete registration');
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto">
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden my-auto text-slate-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fadeIn">
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl shadow-indigo-950/40 text-slate-100 flex flex-col">
         
-        {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-800 bg-slate-950">
+        {/* Modal Header */}
+        <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-2xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
-              <UserCheck className="w-5 h-5" />
+              <UserCheck className="w-6 h-6" />
             </div>
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                User Account System
-                <span className="text-[10px] font-normal bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                  Verified Identity
+                Account & Identity Management
+                <span className="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 px-2 py-0.5 rounded-full uppercase tracking-wider font-semibold">
+                  Secure
                 </span>
               </h2>
-              <p className="text-xs text-slate-400">Create profile, verify phone/ID, or switch active user</p>
+              <p className="text-xs text-slate-400">Manage device accounts, sign in, or create a unique profile</p>
             </div>
           </div>
           <button
@@ -313,26 +384,39 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
         {/* Tab Switcher */}
         <div className="flex border-b border-slate-800 bg-slate-950/50 p-1.5 gap-1">
           <button
-            onClick={() => { setTab('register'); setErrorMsg(null); }}
-            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-              tab === 'register'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>Create Account</span>
-          </button>
-          <button
             onClick={() => { setTab('switch'); setErrorMsg(null); }}
-            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
               tab === 'switch'
                 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Users className="w-4 h-4" />
+            <Users className="w-3.5 h-3.5" />
             <span>Switch Account ({registeredUsers.length})</span>
+          </button>
+
+          <button
+            onClick={() => { setTab('signin'); setErrorMsg(null); }}
+            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              tab === 'signin'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <LogIn className="w-3.5 h-3.5" />
+            <span>Sign In</span>
+          </button>
+
+          <button
+            onClick={() => { setTab('register'); setErrorMsg(null); }}
+            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              tab === 'register'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Create Account</span>
           </button>
         </div>
 
@@ -344,29 +428,37 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           </div>
         )}
 
-        {/* TAB 1: SWITCH USER */}
+        {/* TAB 1: SWITCH USER (Device Accounts) */}
         {tab === 'switch' && (
           <div className="p-5 space-y-4 max-h-[480px] overflow-y-auto">
-            <p className="text-xs text-slate-400">
-              Select an account to instantly switch session context, karma points, and intent match feeds:
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-slate-400">
+                Accounts maintained on this device:
+              </p>
+              <span className="text-[10px] text-slate-500 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
+                Isolated to Device
+              </span>
+            </div>
+
             <div className="space-y-2.5">
               {registeredUsers.map((u) => {
                 const isActive = u.id === activeUser.id;
                 return (
                   <div
                     key={u.id}
-                    onClick={() => {
-                      onSelectUser(u);
-                      onClose();
-                    }}
-                    className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                    className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${
                       isActive
                         ? 'bg-indigo-950/60 border-indigo-500/50 shadow-md'
                         : 'bg-slate-950 border-slate-800 hover:border-slate-700'
                     }`}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      onClick={() => {
+                        onSelectUser(u);
+                        onClose();
+                      }}
+                      className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer"
+                    >
                       <img
                         src={u.avatar}
                         alt={u.name}
@@ -385,17 +477,114 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
                         <p className="text-[10px] text-slate-500">{u.location} • Trust {u.trustScore}%</p>
                       </div>
                     </div>
-                    <button className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 shrink-0">
-                      {isActive ? 'Current' : 'Switch'}
-                    </button>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => {
+                          onSelectUser(u);
+                          onClose();
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                          isActive
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                        }`}
+                      >
+                        {isActive ? 'Current' : 'Switch'}
+                      </button>
+
+                      {onRemoveUserFromDevice && registeredUsers.length > 1 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRemoveUserFromDevice(u.id);
+                          }}
+                          title="Remove from this device"
+                          className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-xl transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
+
+            <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row gap-2">
+              <button
+                onClick={() => { setTab('signin'); setErrorMsg(null); }}
+                className="flex-1 py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+              >
+                <LogIn className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Sign In to Existing Account</span>
+              </button>
+              <button
+                onClick={() => { setTab('register'); setErrorMsg(null); }}
+                className="flex-1 py-2.5 px-3 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Create New Account</span>
+              </button>
+            </div>
           </div>
         )}
 
-        {/* TAB 2: REGISTER NEW ACCOUNT */}
+        {/* TAB 2: SIGN IN */}
+        {tab === 'signin' && (
+          <div className="p-5 space-y-4 max-h-[480px] overflow-y-auto">
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+              <div>
+                <h3 className="text-xs font-bold text-white mb-1 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-indigo-400" />
+                  Sign In with Credentials
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Enter the exact name or registered phone number of your account to load it onto this device:
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">Account Name or Phone Number *</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={loginQuery}
+                    onChange={(e) => setLoginQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSignIn();
+                    }}
+                    placeholder="e.g. Harikrishna or +1 555-0192"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 pr-10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                  <Search className="w-4 h-4 text-slate-400 absolute right-3 top-3.5" />
+                </div>
+              </div>
+
+              <button
+                onClick={handleSignIn}
+                disabled={isSearching}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/20 transition-all flex items-center justify-center gap-2"
+              >
+                {isSearching ? (
+                  <span>Searching Credentials...</span>
+                ) : (
+                  <>
+                    <LogIn className="w-4 h-4" />
+                    <span>Sign In to Device</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Accounts signed in on this device will be securely saved to your device switcher.</span>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: REGISTER NEW ACCOUNT */}
         {tab === 'register' && (
           <div className="p-5 space-y-5 max-h-[520px] overflow-y-auto">
             
@@ -419,10 +608,10 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g., Alex Rivera"
+                    placeholder="e.g. Alex Morgan"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-indigo-500"
-                    required
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">Each account must have a unique name on Near Intent.</p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -482,29 +671,29 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
                               if (file) {
                                 const reader = new FileReader();
                                 reader.onloadend = () => {
-                                  if (reader.result) {
-                                    setAvatar(reader.result.toString());
-                                  }
+                                  if (reader.result) setAvatar(reader.result as string);
                                 };
                                 reader.readAsDataURL(file);
                               }
                             }}
                           />
                         </label>
-                        <p className="text-[10px] text-slate-400">Or pick a preset below:</p>
+                        <p className="text-[10px] text-slate-400">Or pick a preset avatar below:</p>
                       </div>
                     </div>
 
-                    <div className="flex gap-2 pt-1 overflow-x-auto">
-                      {PRESET_AVATARS.map((p, idx) => (
-                        <img
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                      {PRESET_AVATARS.map((url, idx) => (
+                        <button
                           key={idx}
-                          src={p}
-                          onClick={() => setAvatar(p)}
-                          className={`w-9 h-9 rounded-lg object-cover cursor-pointer border-2 transition-all ${
-                            avatar === p ? 'border-indigo-500 scale-105' : 'border-slate-800 hover:border-slate-600'
+                          type="button"
+                          onClick={() => setAvatar(url)}
+                          className={`w-9 h-9 rounded-xl overflow-hidden border-2 shrink-0 transition-all ${
+                            avatar === url ? 'border-indigo-500 scale-105' : 'border-slate-800 opacity-60 hover:opacity-100'
                           }`}
-                        />
+                        >
+                          <img src={url} alt={`Avatar preset ${idx}`} className="w-full h-full object-cover" />
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -523,11 +712,17 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
 
                 <div className="flex flex-col sm:flex-row gap-2 pt-2">
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       if (!name.trim()) {
                         setErrorMsg('Please enter your full name');
                         return;
                       }
+                      const dupErr = await validateDuplicates(name.trim(), undefined, undefined);
+                      if (dupErr) {
+                        setErrorMsg(dupErr);
+                        return;
+                      }
+                      setErrorMsg(null);
                       setStep(2);
                     }}
                     className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/20 transition-all flex items-center justify-center gap-2"
@@ -550,169 +745,163 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
             {/* Step 2: Verification Checks */}
             {step === 2 && (
               <div className="space-y-4">
-                <div className="bg-indigo-950/40 border border-indigo-500/30 p-3.5 rounded-2xl text-xs text-indigo-200 flex items-center gap-2.5">
-                  <ShieldCheck className="w-5 h-5 text-indigo-400 shrink-0" />
-                  <span>
-                    Verifying phone SMS and identity boosts your account Trust Score to <strong>98%</strong> and boosts candidate priority!
-                  </span>
-                </div>
+                <p className="text-xs text-slate-400">
+                  Verify your trust parameters to unlock verified status and priority AI intent matches:
+                </p>
 
-                {/* Check 1: SMS Phone */}
-                <div className="bg-slate-950 border border-slate-800 p-4 rounded-2xl space-y-3">
+                {/* 1. Phone SMS Check */}
+                <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs text-white flex items-center gap-2">
-                      <Phone className="w-4 h-4 text-emerald-400" />
-                      Check 1: Phone SMS Verification
-                    </span>
+                    <div className="flex items-center gap-2 text-xs font-bold text-white">
+                      <Smartphone className="w-4 h-4 text-indigo-400" />
+                      <span>1. Phone SMS Verification</span>
+                    </div>
                     {phoneVerified && (
-                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1">
-                        <CheckCircle2 className="w-4 h-4" /> Verified
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 font-semibold">
+                        <CheckCircle2 className="w-3 h-3" /> Verified
                       </span>
                     )}
                   </div>
 
-                  {!phoneVerified && (
+                  {!phoneVerified ? (
                     <div className="space-y-2">
-                      <div className="flex flex-col sm:flex-row gap-2">
+                      <div className="flex gap-2">
                         <input
-                          type="tel"
+                          type="text"
                           value={phoneNumber}
                           onChange={(e) => setPhoneNumber(e.target.value)}
-                          placeholder="+1 (555) 019-2834"
-                          className="flex-1 bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                          placeholder="+1 555-0192"
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
                         />
-                        {!otpSent ? (
-                          <button
-                            onClick={handleSendOtp}
-                            className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shrink-0 shadow-md shadow-indigo-600/20"
-                          >
-                            Send OTP SMS
-                          </button>
-                        ) : (
-                          <div className="flex gap-2 shrink-0">
-                            <input
-                              type="text"
-                              value={otpCode}
-                              onChange={(e) => setOtpCode(e.target.value)}
-                              placeholder="123456"
-                              className="w-24 bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-xs text-white text-center font-mono font-bold focus:outline-none focus:border-emerald-500"
-                            />
-                            <button
-                              onClick={handleVerifyOtp}
-                              className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20"
-                            >
-                              Verify Code
-                            </button>
-                          </div>
-                        )}
+                        <button
+                          onClick={handleSendOtp}
+                          className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-all shrink-0"
+                        >
+                          {otpSent ? 'Resend OTP' : 'Send Code'}
+                        </button>
                       </div>
 
-                      {otpSent && !phoneVerified && (
-                        <div className="bg-emerald-950/40 border border-emerald-500/30 p-2.5 rounded-xl text-[11px] text-emerald-300 flex items-center justify-between">
-                          <span>📱 Demo OTP code <strong>123456</strong> ready for {phoneNumber}.</span>
+                      {otpSent && (
+                        <div className="flex gap-2 pt-1">
+                          <input
+                            type="text"
+                            value={otpCode}
+                            onChange={(e) => setOtpCode(e.target.value)}
+                            placeholder="Enter OTP (123456)"
+                            className="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                          />
                           <button
                             onClick={handleVerifyOtp}
-                            className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded-lg font-bold ml-2 shrink-0"
+                            className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-all shrink-0"
                           >
-                            Auto-Verify
+                            Verify OTP
                           </button>
                         </div>
                       )}
                     </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-400">Phone number verified successfully.</p>
                   )}
                 </div>
 
-                {/* Check 2: ID Check */}
-                <div className="bg-slate-950 border border-slate-800 p-4 rounded-2xl space-y-3">
+                {/* 2. Government ID Check */}
+                <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs text-white flex items-center gap-2">
-                      <FileCheck className="w-4 h-4 text-emerald-400" />
-                      Check 2: Government Identity Verification
-                    </span>
+                    <div className="flex items-center gap-2 text-xs font-bold text-white">
+                      <FileCheck className="w-4 h-4 text-indigo-400" />
+                      <span>2. Government ID Check</span>
+                    </div>
                     {identityVerified && (
-                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1">
-                        <CheckCircle2 className="w-4 h-4" /> Verified
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 font-semibold">
+                        <CheckCircle2 className="w-3 h-3" /> Verified
                       </span>
                     )}
                   </div>
 
-                  {!identityVerified && (
+                  {!identityVerified ? (
                     <div className="space-y-2">
-                      <label className="block text-[11px] text-slate-400 font-medium">Government ID / Passport / Driver's License Number</label>
-                      <div className="flex flex-col sm:flex-row gap-2">
+                      <div className="flex gap-2">
                         <input
                           type="text"
                           value={governmentId}
                           onChange={(e) => setGovernmentId(e.target.value)}
-                          placeholder="e.g. GOV-8942019"
-                          className="flex-1 bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
+                          placeholder="e.g. Passport / GOV-9842"
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
                         />
                         <button
                           onClick={handleSimulateIdScan}
                           disabled={idUploading}
-                          className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shrink-0 shadow-md shadow-indigo-600/20 disabled:opacity-50"
+                          className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all shrink-0 flex items-center gap-1"
                         >
-                          {idUploading ? 'AI Scanning...' : 'Verify ID Document'}
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>{idUploading ? 'Scanning...' : 'Verify ID'}</span>
                         </button>
                       </div>
                     </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-400">Government ID verified.</p>
                   )}
                 </div>
 
-                {/* Check 3: AI Skill Quiz */}
-                <div className="bg-slate-950 border border-slate-800 p-4 rounded-2xl space-y-3">
+                {/* 3. Skill & Expertise Quiz */}
+                <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs text-white flex items-center gap-2">
-                      <Award className="w-4 h-4 text-amber-400" />
-                      Check 3: AI Skill Certification
-                    </span>
-                    {skillVerified ? (
-                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1">
-                        <CheckCircle2 className="w-4 h-4" /> AI Certified
+                    <div className="flex items-center gap-2 text-xs font-bold text-white">
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      <span>3. Platform Knowledge Quiz</span>
+                    </div>
+                    {skillVerified && (
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 font-semibold">
+                        <CheckCircle2 className="w-3 h-3" /> Verified
                       </span>
-                    ) : (
-                      <span className="text-[10px] text-indigo-300 font-medium">Answer Quiz below</span>
                     )}
                   </div>
 
-                  {!skillVerified && (
-                    <div className="space-y-2 pt-2 border-t border-slate-800">
-                      <p className="text-xs text-slate-200 font-semibold">
-                        Q{quizQuestionIndex + 1}: {sampleQuiz[quizQuestionIndex].question}
+                  {!skillVerified ? (
+                    <div className="space-y-2 text-xs">
+                      <p className="font-medium text-slate-200">
+                        Q: {sampleQuiz[quizQuestionIndex].question}
                       </p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 gap-1.5">
                         {sampleQuiz[quizQuestionIndex].options.map((opt, idx) => (
                           <button
                             key={idx}
                             onClick={() => handleAnswerQuiz(idx)}
-                            className="p-2.5 bg-slate-900 hover:bg-indigo-900/40 border border-slate-800 hover:border-indigo-500/50 rounded-xl text-xs text-left text-slate-300 transition-all"
+                            className={`p-2 rounded-xl border text-left text-[11px] transition-all ${
+                              quizAnswer === idx
+                                ? idx === sampleQuiz[quizQuestionIndex].correct
+                                  ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200'
+                                  : 'bg-rose-950/80 border-rose-500 text-rose-200'
+                                : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                            }`}
                           >
                             {opt}
                           </button>
                         ))}
                       </div>
                     </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-400">Skills and domain competence verified.</p>
                   )}
                 </div>
 
                 <div className="flex gap-2 pt-2">
                   <button
                     onClick={() => setStep(1)}
-                    className="w-1/3 py-3 bg-slate-800 text-slate-300 rounded-xl text-xs font-bold"
+                    className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition-all"
                   >
                     Back
                   </button>
                   <button
                     onClick={handleCompleteRegistration}
-                    className="w-2/3 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-2"
+                    className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-2"
                   >
-                    <Sparkles className="w-4 h-4" />
-                    <span>Create Profile & Launch</span>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Complete & Save Account</span>
                   </button>
                 </div>
               </div>
             )}
-
           </div>
         )}
 

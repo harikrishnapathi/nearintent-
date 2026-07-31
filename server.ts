@@ -119,6 +119,15 @@ app.post("/api/users/register", (req, res) => {
       return res.status(400).json({ error: "Missing required user name" });
     }
 
+    // Check for duplicate account name
+    if (name && name.trim()) {
+      const cleanName = name.trim().toLowerCase();
+      const existingNameUser = registeredUsers.find(u => u.name && u.name.trim().toLowerCase() === cleanName);
+      if (existingNameUser) {
+        return res.status(400).json({ error: `An account named "${name}" already exists. Account names must be unique. Please choose a different name or sign in.` });
+      }
+    }
+
     // Check for duplicate phone number
     if (phoneNumber && phoneNumber.trim()) {
       const cleanPhone = phoneNumber.replace(/\D/g, "");

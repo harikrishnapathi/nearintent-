@@ -99,6 +99,8 @@ export default function App() {
     return [currentUser];
   });
 
+  const [allNetworkUsers, setAllNetworkUsers] = useState<UserProfile[]>([]);
+
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
   const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
@@ -146,15 +148,7 @@ export default function App() {
 
     const unsubscribeUsers = subscribeToUsers((fsUsers) => {
       if (fsUsers && fsUsers.length > 0) {
-        setRegisteredUsersList(prev => {
-          const merged = [...fsUsers];
-          prev.forEach(p => {
-            if (!merged.some(m => m.id === p.id)) {
-              merged.push(p);
-            }
-          });
-          return merged;
-        });
+        setAllNetworkUsers(fsUsers);
       }
     });
 
@@ -759,15 +753,20 @@ export default function App() {
             cancellationPenalties: 0,
             streakDays: 1
           }));
-          setRegisteredUsersList(formattedUsers);
+          setAllNetworkUsers(formattedUsers);
         }
       })
       .catch(e => console.log('Backend user fetch:', e));
   }, []);
 
-  // Synchronize dynamic leaderboard from active user & registered users
+  // Synchronize dynamic leaderboard from active user, device users & network users
   React.useEffect(() => {
-    const allMembers = [user, ...registeredUsersList.filter(u => u && u.id !== user.id)];
+    const memberMap = new Map<string, UserProfile>();
+    allNetworkUsers.forEach(u => u && memberMap.set(u.id, u));
+    registeredUsersList.forEach(u => u && memberMap.set(u.id, u));
+    if (user) memberMap.set(user.id, user);
+
+    const allMembers = Array.from(memberMap.values());
     const lbItems: LeaderboardItem[] = allMembers.map((m, idx) => ({
       id: `lb_${m.id || idx}`,
       rank: idx + 1,
@@ -783,7 +782,7 @@ export default function App() {
       badge: (m.badges && m.badges[0]) ? m.badges[0].name : 'Verified Member'
     }));
     setLeaderboard(lbItems);
-  }, [user, registeredUsersList]);
+  }, [user, registeredUsersList, allNetworkUsers]);
 
   // Intent Creation Handler with Real AI Matching against registered users
   const handleCreateIntent = async (newIntent: Intent) => {
@@ -1655,10 +1654,31 @@ export default function App() {
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         registeredUsers={registeredUsersList}
+        allNetworkUsers={allNetworkUsers}
         activeUser={user}
         onSelectUser={(selected) => {
+          setRegisteredUsersList(prev => {
+            if (prev.some(u => u.id === selected.id)) return prev;
+            return [selected, ...prev];
+          });
           setUser(selected);
           showToast(`Logged in as ${selected.name}`, 'info');
+        }}
+        onRemoveUserFromDevice={(targetId) => {
+          setRegisteredUsersList(prev => prev.filter(u => u.id !== targetId));
+          if (user && user.id === targetId) {
+            const remaining = registeredUsersList.filter(u => u.id !== targetId);
+            if (remaining.length > 0) {
+              setUser(remaining[0]);
+              showToast(`Account removed from device. Switched to ${remaining[0].name}`, 'info');
+            } else {
+              setUser(currentUser);
+              setIsAuthModalOpen(true);
+              showToast('Account removed from this device.', 'info');
+            }
+          } else {
+            showToast('Account removed from this device', 'info');
+          }
         }}
         onRegisterNewUser={(newUser) => {
           setRegisteredUsersList(prev => [newUser, ...prev]);

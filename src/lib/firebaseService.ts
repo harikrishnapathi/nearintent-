@@ -60,15 +60,21 @@ export async function deleteUserFromFirestore(userId: string): Promise<void> {
   }
 }
 
-// Check Firestore for duplicate phone number or government ID
-export async function checkDuplicateUserInFirestore(phoneNumber?: string, governmentId?: string): Promise<string | null> {
+// Check Firestore for duplicate account name, phone number, or government ID
+export async function checkDuplicateUserInFirestore(nameToCheck?: string, phoneNumber?: string, governmentId?: string): Promise<string | null> {
   try {
     const snapshot = await getDocs(collection(db, USERS_COLLECTION));
+    const cleanName = nameToCheck ? nameToCheck.trim().toLowerCase() : "";
     const cleanPhone = phoneNumber ? phoneNumber.replace(/\D/g, "") : "";
     const cleanGovId = governmentId ? governmentId.trim().toUpperCase() : "";
 
     for (const docSnap of snapshot.docs) {
       const u = docSnap.data() as UserProfile;
+      if (cleanName && u.name) {
+        if (u.name.trim().toLowerCase() === cleanName) {
+          return `An account named "${u.name}" is already registered. Account names must be unique. Please choose a different name or sign in.`;
+        }
+      }
       if (cleanPhone && cleanPhone.length >= 5 && u.phoneNumber) {
         const uCleanPhone = u.phoneNumber.replace(/\D/g, "");
         if (uCleanPhone === cleanPhone) {
