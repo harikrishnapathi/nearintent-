@@ -242,6 +242,10 @@ export interface CallSignal {
   answerSdp?: string;
   callerIceCandidates?: string[];
   receiverIceCandidates?: string[];
+  lastSpokenText?: string;
+  lastSpeakerId?: string;
+  lastSpeakerName?: string;
+  spokenTimestamp?: number;
   createdAt: number;
 }
 

@@ -169,17 +169,18 @@ export default function App() {
     const fetchServerIntents = async () => {
       try {
         const res = await fetch('/api/intents');
+        if (!res.ok) return;
         const data = await res.json();
-        if (data.success && Array.isArray(data.intents)) {
+        if (data && data.success && Array.isArray(data.intents)) {
           mergeAndSetIntents(data.intents);
         }
       } catch (e) {
-        // quiet fallback
+        // quiet fallback for network drops
       }
     };
 
     fetchServerIntents();
-    const interval = setInterval(fetchServerIntents, 1500);
+    const interval = setInterval(fetchServerIntents, 10000);
 
     let bc: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== 'undefined') {
@@ -1683,6 +1684,8 @@ export default function App() {
           intentTitle={activeCall.intentTitle}
           userAvatar={user.avatar}
           userName={user.name}
+          currentUserId={user.id}
+          callSignal={activeCallSignal}
           initialCallMode={activeCall.callType}
           callStatus={activeCall.status}
           isMinimized={isCallMinimized}

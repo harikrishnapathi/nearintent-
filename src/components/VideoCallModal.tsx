@@ -18,8 +18,11 @@ import {
   ChevronDown,
   Maximize2,
   Minimize2,
-  ArrowLeft
+  ArrowLeft,
+  Volume1
 } from 'lucide-react';
+import { CallSignal } from '../types';
+import { updateCallSignalInFirestore } from '../lib/firebaseService';
 
 interface VideoCallModalProps {
   isOpen: boolean;
@@ -29,6 +32,8 @@ interface VideoCallModalProps {
   intentTitle: string;
   userAvatar?: string;
   userName?: string;
+  currentUserId?: string;
+  callSignal?: CallSignal | null;
   initialCallMode?: 'audio' | 'video';
   callStatus?: 'calling' | 'accepted';
   isMinimized?: boolean;
@@ -43,6 +48,8 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
   intentTitle,
   userAvatar,
   userName = 'Account Holder',
+  currentUserId = '',
+  callSignal = null,
   initialCallMode = 'video',
   callStatus = 'accepted',
   isMinimized = false,
@@ -57,13 +64,42 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
   const [transcripts, setTranscripts] = useState<string[]>([]);
   const [micVolume, setMicVolume] = useState<number>(0); // 0-100 real-time decibel meter
   const [liveSpokenText, setLiveSpokenText] = useState<string>('');
+  const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false);
+  const [isRemoteConnected, setIsRemoteConnected] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const speechRecognitionRef = useRef<any>(null);
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+  const lastProcessedSpokenTimestampRef = useRef<number>(0);
+
+  // Unlock Browser Audio Autoplay Security Restrictions
+  const handleUnlockAudio = async () => {
+    setAudioUnlocked(true);
+    try {
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = 1.0;
+        await remoteAudioRef.current.play().catch(() => {});
+      }
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        await ctx.resume();
+      }
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.resume();
+      }
+      playIncomingVoiceBeep();
+      speakText(`Voice speaker audio activated for ${userName}`);
+    } catch (e) {
+      console.warn('Audio unlock error:', e);
+    }
+  };
 
   // Web Speech Synthesis: Speaks remote voice out loud through browser speakers
   const speakText = (text: string) => {
@@ -97,16 +133,10 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
 
   // Explicit audio unlock and test voice
   const testSpeakerVoice = () => {
-    try {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.resume();
-      }
-      playIncomingVoiceBeep();
-      speakText(`Hello ${userName}, voice call audio is active and working properly.`);
-    } catch (e) {}
+    handleUnlockAudio();
   };
 
-  // Play audio chime when remote participant speaks
+  // Play audio chime when remote participant speaks or connects
   const playIncomingVoiceBeep = () => {
     if (!isSpeakerOn) return;
     try {
@@ -311,7 +341,7 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
             setTranscripts(prev => [...prev.slice(-6), formatted]);
             setLiveSpokenText('');
 
-            // Broadcast spoken words to other window/tab
+            // Broadcast spoken words to other window/tab & Firestore cross-device
             if (broadcastChannelRef.current) {
               broadcastChannelRef.current.postMessage({
                 type: 'LIVE_SPEECH',
@@ -319,11 +349,19 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
                 text: finalPhrase
               });
             }
+
+            if (callSignal && callSignal.id) {
+              updateCallSignalInFirestore(callSignal.id, {
+                lastSpokenText: finalPhrase,
+                lastSpeakerId: currentUserId || userName,
+                lastSpeakerName: userName,
+                spokenTimestamp: Date.now()
+              });
+            }
           }
         };
 
         recognition.onerror = (event: any) => {
-          // 'aborted' and 'no-speech' are standard lifecycle events when toggling or running multi-tabs
           if (event.error === 'aborted' || event.error === 'no-speech') {
             return;
           }
@@ -331,7 +369,6 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
         };
 
         recognition.onend = () => {
-          // Restart gently if call is still active and not unmounted
           if (isMounted && isOpen && isMicOn && speechRecognitionRef.current) {
             setTimeout(() => {
               if (isMounted && isOpen && isMicOn) {
@@ -355,7 +392,121 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
         speechRecognitionRef.current = null;
       }
     };
-  }, [isOpen, isMicOn, userName]);
+  }, [isOpen, isMicOn, userName, callSignal?.id, currentUserId]);
+
+  // Real-time Firestore Cross-Device Voice Sync Listener
+  useEffect(() => {
+    if (!isOpen || !callSignal || !callSignal.lastSpokenText || !callSignal.spokenTimestamp) return;
+
+    if (
+      callSignal.spokenTimestamp > lastProcessedSpokenTimestampRef.current &&
+      callSignal.lastSpeakerId !== (currentUserId || userName)
+    ) {
+      lastProcessedSpokenTimestampRef.current = callSignal.spokenTimestamp;
+      const speakerName = callSignal.lastSpeakerName || participantName;
+      const text = callSignal.lastSpokenText;
+
+      playIncomingVoiceBeep();
+      speakText(text);
+
+      setTranscripts(prev => [
+        ...prev.slice(-6),
+        `🗣️ ${speakerName}: "${text}"`
+      ]);
+    }
+  }, [isOpen, callSignal?.lastSpokenText, callSignal?.spokenTimestamp, currentUserId, userName, participantName]);
+
+  // Real WebRTC P2P Audio Connection between 2 physical devices
+  useEffect(() => {
+    if (!isOpen || !callSignal || !callSignal.id) return;
+
+    let pc: RTCPeerConnection | null = null;
+
+    try {
+      const configuration: RTCConfiguration = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
+        ]
+      };
+
+      pc = new RTCPeerConnection(configuration);
+      peerConnectionRef.current = pc;
+
+      // Attach local microphone stream tracks
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => {
+          if (pc && mediaStreamRef.current) {
+            pc.addTrack(track, mediaStreamRef.current);
+          }
+        });
+      }
+
+      // Route incoming remote audio track to audio player element
+      pc.ontrack = (event) => {
+        setIsRemoteConnected(true);
+        if (remoteAudioRef.current && event.streams && event.streams[0]) {
+          remoteAudioRef.current.srcObject = event.streams[0];
+          remoteAudioRef.current.play().catch(err => {
+            console.warn("Autoplay remote audio blocked, tap screen to unlock:", err);
+          });
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
+          setIsRemoteConnected(true);
+        }
+      };
+
+      // Handle Offer/Answer Negotiation via Firestore
+      const isCaller = callSignal.callerId === currentUserId;
+
+      if (isCaller && !callSignal.offerSdp) {
+        pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: callMode === 'video' })
+          .then(offer => pc?.setLocalDescription(offer))
+          .then(() => {
+            if (pc?.localDescription) {
+              updateCallSignalInFirestore(callSignal.id, {
+                offerSdp: JSON.stringify(pc.localDescription)
+              });
+            }
+          })
+          .catch(e => console.warn('WebRTC createOffer error:', e));
+      } else if (!isCaller && callSignal.offerSdp && !callSignal.answerSdp && pc.signalingState === 'stable') {
+        try {
+          const offerDesc = new RTCSessionDescription(JSON.parse(callSignal.offerSdp));
+          pc.setRemoteDescription(offerDesc)
+            .then(() => pc?.createAnswer())
+            .then(answer => pc?.setLocalDescription(answer))
+            .then(() => {
+              if (pc?.localDescription) {
+                updateCallSignalInFirestore(callSignal.id, {
+                  answerSdp: JSON.stringify(pc.localDescription)
+                });
+              }
+            })
+            .catch(e => console.warn('WebRTC setRemoteDescription offer error:', e));
+        } catch (e) {}
+      } else if (isCaller && callSignal.answerSdp && pc.signalingState === 'have-local-offer') {
+        try {
+          const answerDesc = new RTCSessionDescription(JSON.parse(callSignal.answerSdp));
+          pc.setRemoteDescription(answerDesc).catch(e => console.warn('WebRTC setRemoteDescription answer error:', e));
+        } catch (e) {}
+      }
+
+    } catch (err) {
+      console.warn('WebRTC peer connection setup error:', err);
+    }
+
+    return () => {
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+      }
+    };
+  }, [isOpen, callSignal?.id, callSignal?.offerSdp, callSignal?.answerSdp, currentUserId, callMode]);
 
   if (!isOpen) return null;
 
@@ -465,8 +616,30 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/90 backdrop-blur-md">
+      {/* Hidden Audio Element for WebRTC Remote Stream */}
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        className="hidden"
+      />
+
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col h-[85vh] max-h-[700px] text-slate-100">
         
+        {/* Unmute & Speaker Activation Notice Banner */}
+        {!audioUnlocked && (
+          <button
+            onClick={handleUnlockAudio}
+            className="w-full bg-gradient-to-r from-amber-500 via-indigo-600 to-purple-600 hover:from-amber-400 hover:to-purple-500 text-white font-extrabold px-4 py-2.5 text-xs flex items-center justify-between gap-2 shadow-lg animate-pulse transition-all cursor-pointer"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Volume2 className="w-4 h-4 text-amber-200 shrink-0" />
+              <span className="truncate">🔊 TAP HERE TO UNMUTE AUDIO & ENABLE SPEAKER VOICE</span>
+            </div>
+            <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] uppercase font-mono shrink-0">Tap to Enable</span>
+          </button>
+        )}
+
         {/* Call Header */}
         <div className="p-3 sm:p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">

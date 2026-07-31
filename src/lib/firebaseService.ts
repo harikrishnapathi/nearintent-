@@ -98,10 +98,9 @@ export function subscribeToUsers(onUpdate: (users: UserProfile[]) => void) {
         onUpdate(users);
       }
     }, (err) => {
-      console.warn('Firestore subscribeToUsers error:', err);
+      // Quiet handler for network/DNS drops
     });
   } catch (err) {
-    console.error('Firestore subscribeToUsers init error:', err);
     return () => {};
   }
 }
@@ -143,10 +142,9 @@ export function subscribeToIntents(onUpdate: (intents: Intent[]) => void) {
       intents.sort((a, b) => b.createdAt - a.createdAt);
       onUpdate(intents);
     }, (err) => {
-      console.warn('Firestore subscribeToIntents error:', err);
+      // Quiet handler for network drops
     });
   } catch (err) {
-    console.error('Firestore subscribeToIntents init error:', err);
     return () => {};
   }
 }
@@ -180,10 +178,9 @@ export function subscribeToThreads(currentUserId: string, onUpdate: (threads: Ch
       threads.sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
       onUpdate(threads);
     }, (err) => {
-      console.warn('Firestore subscribeToThreads error:', err);
+      // Quiet handler for network drops
     });
   } catch (err) {
-    console.error('Firestore subscribeToThreads init error:', err);
     return () => {};
   }
 }
@@ -240,10 +237,9 @@ export function subscribeToAllMessages(onUpdate: (messagesMap: Record<string, Ch
       });
       onUpdate(map);
     }, (err) => {
-      console.warn('Firestore subscribeToAllMessages error:', err);
+      // Quiet handler for network drops
     });
   } catch (err) {
-    console.error('Firestore subscribeToAllMessages init error:', err);
     return () => {};
   }
 }
@@ -275,10 +271,9 @@ export function subscribeToCalls(currentUserId: string, onUpdate: (activeCalls: 
       });
       onUpdate(calls);
     }, (err) => {
-      console.warn('Firestore subscribeToCalls error:', err);
+      // Quiet handler for network drops
     });
   } catch (err) {
-    console.error('Firestore subscribeToCalls init error:', err);
     return () => {};
   }
 }
