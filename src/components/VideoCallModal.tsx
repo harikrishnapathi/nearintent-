@@ -22,7 +22,7 @@ import {
   Volume1
 } from 'lucide-react';
 import { CallSignal } from '../types';
-import { updateCallSignalInFirestore } from '../lib/firebaseService';
+import { updateCallSignalInFirestore, addIceCandidateToFirestore } from '../lib/firebaseService';
 
 interface VideoCallModalProps {
   isOpen: boolean;
@@ -78,6 +78,7 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
   const speechRecognitionRef = useRef<any>(null);
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
   const lastProcessedSpokenTimestampRef = useRef<number>(0);
+  const addedCandidatesRef = useRef<Set<string>>(new Set());
 
   // Unlock Browser Audio Autoplay Security Restrictions
   const handleUnlockAudio = async () => {
@@ -218,6 +219,22 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
           mediaStreamRef.current = stream;
           if (videoRef.current && callMode === 'video') {
             videoRef.current.srcObject = stream;
+          }
+
+          // Dynamically attach or replace local tracks on RTCPeerConnection if active
+          if (peerConnectionRef.current) {
+            const pc = peerConnectionRef.current;
+            const senders = pc.getSenders();
+            stream.getTracks().forEach(track => {
+              const existingSender = senders.find(s => s.track?.kind === track.kind);
+              if (existingSender) {
+                existingSender.replaceTrack(track).catch(() => {});
+              } else {
+                try {
+                  pc.addTrack(track, stream);
+                } catch (e) {}
+              }
+            });
           }
 
           // Web Audio API volume monitoring
@@ -468,9 +485,12 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
     }
   }, [isOpen, isMinimized, isSpeakerOn, callMode, isRemoteConnected]);
 
-  // Real WebRTC P2P Audio/Video Connection between 2 physical devices or tabs
+  // Real WebRTC P2P Connection Initialization (runs ONCE per call ID)
   useEffect(() => {
     if (!isOpen || !callSignal || !callSignal.id) return;
+
+    addedCandidatesRef.current.clear();
+    setIsRemoteConnected(false);
 
     let pc: RTCPeerConnection | null = null;
     let iceChannel: BroadcastChannel | null = null;
@@ -480,42 +500,40 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' }
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' }
         ]
       };
 
       pc = new RTCPeerConnection(configuration);
       peerConnectionRef.current = pc;
 
+      // BroadcastChannel for same-tab/browser fallback
       if (typeof BroadcastChannel !== 'undefined') {
-        iceChannel = new BroadcastChannel(`near_intent_webrtc_ice_${callSignal.id}`);
-        iceChannel.onmessage = async (e) => {
-          if (!e.data || e.data.senderId === (currentUserId || userName)) return;
-          if (e.data.type === 'ICE_CANDIDATE' && e.data.candidate && pc) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(e.data.candidate));
-            } catch (err) {}
-          }
-        };
+        try {
+          iceChannel = new BroadcastChannel(`near_intent_webrtc_ice_${callSignal.id}`);
+          iceChannel.onmessage = async (e) => {
+            if (!e.data || e.data.senderId === (currentUserId || userName)) return;
+            if (e.data.type === 'ICE_CANDIDATE' && e.data.candidate && pc && pc.remoteDescription) {
+              try {
+                const candStr = JSON.stringify(e.data.candidate);
+                if (!addedCandidatesRef.current.has(candStr)) {
+                  await pc.addIceCandidate(new RTCIceCandidate(e.data.candidate));
+                  addedCandidatesRef.current.add(candStr);
+                }
+              } catch (err) {}
+            }
+          };
+        } catch (e) {}
       }
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate && iceChannel) {
-          try {
-            iceChannel.postMessage({
-              type: 'ICE_CANDIDATE',
-              senderId: currentUserId || userName,
-              candidate: event.candidate.toJSON()
-            });
-          } catch (err) {}
-        }
-      };
 
       // Attach local microphone and camera stream tracks
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach(track => {
           if (pc && mediaStreamRef.current) {
-            pc.addTrack(track, mediaStreamRef.current);
+            try { pc.addTrack(track, mediaStreamRef.current); } catch (e) {}
           }
         });
       }
@@ -526,17 +544,44 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
         if (event.streams && event.streams[0]) {
           remoteStreamRef.current = event.streams[0];
           if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = event.streams[0];
-            remoteAudioRef.current.muted = !isSpeakerOn;
-            remoteAudioRef.current.volume = isSpeakerOn ? 1.0 : 0.0;
-            remoteAudioRef.current.play().catch(err => {
-              console.warn("Autoplay remote audio blocked, tap screen to unlock:", err);
-            });
+            try {
+              remoteAudioRef.current.srcObject = event.streams[0];
+              remoteAudioRef.current.muted = !isSpeakerOn;
+              remoteAudioRef.current.volume = isSpeakerOn ? 1.0 : 0.0;
+              remoteAudioRef.current.play().catch(() => {});
+            } catch (e) {}
           }
           if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = event.streams[0];
-            remoteVideoRef.current.play().catch(() => {});
+            try {
+              remoteVideoRef.current.srcObject = event.streams[0];
+              remoteVideoRef.current.play().catch(() => {});
+            } catch (e) {}
           }
+        }
+      };
+
+      // Candidate generation callback
+      pc.onicecandidate = (event) => {
+        if (event.candidate && callSignal?.id) {
+          try {
+            const candJson = JSON.stringify(event.candidate.toJSON());
+            
+            // Send candidate over BroadcastChannel for same-browser testing
+            if (iceChannel) {
+              iceChannel.postMessage({
+                type: 'ICE_CANDIDATE',
+                senderId: currentUserId || userName,
+                candidate: event.candidate.toJSON()
+              });
+            }
+
+            // Send candidate over Firestore for real cross-device calls (Desktop + Mobile)
+            const uId = (currentUserId || userName || '').toLowerCase();
+            const cId = (callSignal.callerId || '').toLowerCase();
+            const cName = (callSignal.callerName || '').toLowerCase();
+            const role = (cId === uId || (cName !== '' && cName === uId)) ? 'caller' : 'receiver';
+            addIceCandidateToFirestore(callSignal.id, role, candJson);
+          } catch (err) {}
         }
       };
 
@@ -545,42 +590,6 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
           setIsRemoteConnected(true);
         }
       };
-
-      // Handle Offer/Answer Negotiation via Firestore
-      const isCaller = callSignal.callerId === currentUserId;
-
-      if (isCaller && !callSignal.offerSdp) {
-        pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
-          .then(offer => pc?.setLocalDescription(offer))
-          .then(() => {
-            if (pc?.localDescription) {
-              updateCallSignalInFirestore(callSignal.id, {
-                offerSdp: JSON.stringify(pc.localDescription)
-              });
-            }
-          })
-          .catch(e => console.warn('WebRTC createOffer error:', e));
-      } else if (!isCaller && callSignal.offerSdp && !callSignal.answerSdp && pc.signalingState === 'stable') {
-        try {
-          const offerDesc = new RTCSessionDescription(JSON.parse(callSignal.offerSdp));
-          pc.setRemoteDescription(offerDesc)
-            .then(() => pc?.createAnswer())
-            .then(answer => pc?.setLocalDescription(answer))
-            .then(() => {
-              if (pc?.localDescription) {
-                updateCallSignalInFirestore(callSignal.id, {
-                  answerSdp: JSON.stringify(pc.localDescription)
-                });
-              }
-            })
-            .catch(e => console.warn('WebRTC setRemoteDescription offer error:', e));
-        } catch (e) {}
-      } else if (isCaller && callSignal.answerSdp && pc.signalingState === 'have-local-offer') {
-        try {
-          const answerDesc = new RTCSessionDescription(JSON.parse(callSignal.answerSdp));
-          pc.setRemoteDescription(answerDesc).catch(e => console.warn('WebRTC setRemoteDescription answer error:', e));
-        } catch (e) {}
-      }
 
     } catch (err) {
       console.warn('WebRTC peer connection setup error:', err);
@@ -595,7 +604,113 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
         try { iceChannel.close(); } catch (e) {}
       }
     };
-  }, [isOpen, callSignal?.id, callSignal?.offerSdp, callSignal?.answerSdp, currentUserId, callMode, isSpeakerOn]);
+  }, [isOpen, callSignal?.id]);
+
+  // Handle Offer/Answer Negotiation & ICE Candidates via Firestore
+  useEffect(() => {
+    if (!isOpen || !callSignal || !callSignal.id || !peerConnectionRef.current) return;
+
+    const pc = peerConnectionRef.current;
+    const uId = (currentUserId || userName || '').toLowerCase();
+    const cId = (callSignal.callerId || '').toLowerCase();
+    const cName = (callSignal.callerName || '').toLowerCase();
+    const isCaller = cId === uId || (cName !== '' && cName === uId);
+
+    if (isCaller) {
+      // Caller: Create Offer if not created yet
+      if (!callSignal.offerSdp && pc.signalingState === 'stable') {
+        pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
+          .then(offer => pc.setLocalDescription(offer))
+          .then(() => {
+            if (pc.localDescription) {
+              updateCallSignalInFirestore(callSignal.id, {
+                offerSdp: JSON.stringify(pc.localDescription)
+              });
+            }
+          })
+          .catch(e => console.warn('WebRTC createOffer error:', e));
+      } else if (callSignal.answerSdp && pc.signalingState === 'have-local-offer') {
+        try {
+          const answerDesc = new RTCSessionDescription(JSON.parse(callSignal.answerSdp));
+          pc.setRemoteDescription(answerDesc)
+            .then(() => {
+              if (callSignal.receiverIceCandidates && Array.isArray(callSignal.receiverIceCandidates)) {
+                callSignal.receiverIceCandidates.forEach(candStr => {
+                  if (!addedCandidatesRef.current.has(candStr)) {
+                    try {
+                      pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).catch(() => {});
+                      addedCandidatesRef.current.add(candStr);
+                    } catch (e) {}
+                  }
+                });
+              }
+            })
+            .catch(e => console.warn('WebRTC setRemoteDescription answer error:', e));
+        } catch (e) {}
+      }
+
+      // Sync receiver ICE Candidates if remote description is set
+      if (pc.remoteDescription && callSignal.receiverIceCandidates && Array.isArray(callSignal.receiverIceCandidates)) {
+        callSignal.receiverIceCandidates.forEach(candStr => {
+          if (!addedCandidatesRef.current.has(candStr)) {
+            try {
+              pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).catch(() => {});
+              addedCandidatesRef.current.add(candStr);
+            } catch (e) {}
+          }
+        });
+      }
+    } else {
+      // Receiver: Process Offer & Create Answer
+      if (callSignal.offerSdp && !callSignal.answerSdp && pc.signalingState === 'stable') {
+        try {
+          const offerDesc = new RTCSessionDescription(JSON.parse(callSignal.offerSdp));
+          pc.setRemoteDescription(offerDesc)
+            .then(() => pc.createAnswer())
+            .then(answer => pc.setLocalDescription(answer))
+            .then(() => {
+              if (pc.localDescription) {
+                updateCallSignalInFirestore(callSignal.id, {
+                  answerSdp: JSON.stringify(pc.localDescription)
+                });
+              }
+              if (callSignal.callerIceCandidates && Array.isArray(callSignal.callerIceCandidates)) {
+                callSignal.callerIceCandidates.forEach(candStr => {
+                  if (!addedCandidatesRef.current.has(candStr)) {
+                    try {
+                      pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).catch(() => {});
+                      addedCandidatesRef.current.add(candStr);
+                    } catch (e) {}
+                  }
+                });
+              }
+            })
+            .catch(e => console.warn('WebRTC setRemoteDescription offer error:', e));
+        } catch (e) {}
+      }
+
+      // Sync caller ICE Candidates if remote description is set
+      if (pc.remoteDescription && callSignal.callerIceCandidates && Array.isArray(callSignal.callerIceCandidates)) {
+        callSignal.callerIceCandidates.forEach(candStr => {
+          if (!addedCandidatesRef.current.has(candStr)) {
+            try {
+              pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).catch(() => {});
+              addedCandidatesRef.current.add(candStr);
+            } catch (e) {}
+          }
+        });
+      }
+    }
+  }, [
+    isOpen,
+    callSignal?.id,
+    callSignal?.offerSdp,
+    callSignal?.answerSdp,
+    callSignal?.callerIceCandidates,
+    callSignal?.receiverIceCandidates,
+    currentUserId,
+    userName
+  ]);
 
   if (!isOpen) return null;
 
@@ -831,6 +946,8 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
           {callMode === 'audio' ? (
             /* VOICE CALL INTERFACE */
             <div className="flex-1 flex flex-col items-center justify-center space-y-6 my-auto">
+              {/* Keep hidden remote video element mounted so WebRTC video stream attaches even in Voice mode */}
+              <video ref={remoteVideoRef} autoPlay playsInline className="hidden" />
               {/* Participant Avatars in Ring */}
               <div className="flex items-center justify-center gap-8 sm:gap-12 relative">
                 

@@ -3,12 +3,15 @@ import {
   collection,
   doc,
   setDoc,
+  updateDoc,
   deleteDoc,
+  getDoc,
   getDocs,
   onSnapshot,
   query,
   orderBy,
-  addDoc
+  addDoc,
+  arrayUnion
 } from './firebase';
 import { UserProfile, Intent, ChatMessage, ChatThread, CallSignal } from '../types';
 
@@ -317,5 +320,32 @@ export async function deleteCallSignalFromFirestore(callId: string): Promise<voi
     await deleteDoc(callRef);
   } catch (err) {
     console.error('Firestore deleteCallSignal error:', err);
+  }
+}
+
+export async function addIceCandidateToFirestore(callId: string, role: 'caller' | 'receiver', candidateJson: string): Promise<void> {
+  try {
+    const callRef = doc(db, CALLS_COLLECTION, callId);
+    const field = role === 'caller' ? 'callerIceCandidates' : 'receiverIceCandidates';
+    await updateDoc(callRef, {
+      [field]: arrayUnion(candidateJson),
+      updatedAtIso: new Date().toISOString()
+    });
+  } catch (err) {
+    try {
+      const callRef = doc(db, CALLS_COLLECTION, callId);
+      const field = role === 'caller' ? 'callerIceCandidates' : 'receiverIceCandidates';
+      const snap = await getDoc(callRef);
+      if (snap.exists()) {
+        const existing = snap.data()[field] || [];
+        if (!existing.includes(candidateJson)) {
+          await setDoc(callRef, { [field]: [...existing, candidateJson] }, { merge: true });
+        }
+      } else {
+        await setDoc(callRef, { [field]: [candidateJson] }, { merge: true });
+      }
+    } catch (e) {
+      console.error('addIceCandidateToFirestore error:', e);
+    }
   }
 }
