@@ -30,7 +30,7 @@ export function usePeerConnection({
   const addedCandidatesRef = useRef<Set<string>>(new Set());
   const [isRemoteConnected, setIsRemoteConnected] = useState<boolean>(false);
 
-  // 1. Initialize PeerConnection & Event Listeners
+  // 1. Initialize PeerConnection, Event Listeners & Broadcast Channels
   useEffect(() => {
     if (!isOpen || !callSignal || !callSignal.id) return;
 
@@ -39,6 +39,7 @@ export function usePeerConnection({
 
     let pc: RTCPeerConnection | null = null;
     let iceChannel: BroadcastChannel | null = null;
+    let sdpChannel: BroadcastChannel | null = null;
 
     try {
       const configuration: RTCConfiguration = {
@@ -55,10 +56,12 @@ export function usePeerConnection({
       pc = new RTCPeerConnection(configuration);
       peerConnectionRef.current = pc;
 
-      // BroadcastChannel fallback for same-browser multi-window calls
+      // BroadcastChannels for instant multi-window/multi-tab WebRTC signaling
       if (typeof BroadcastChannel !== 'undefined') {
         try {
           iceChannel = new BroadcastChannel(`near_intent_webrtc_ice_${callSignal.id}`);
+          sdpChannel = new BroadcastChannel(`near_intent_webrtc_sdp_${callSignal.id}`);
+
           iceChannel.onmessage = async (e) => {
             if (!e.data || e.data.senderId === (currentUserId || userName)) return;
             if (e.data.type === 'ICE_CANDIDATE' && e.data.candidate && pc && pc.remoteDescription) {
@@ -72,42 +75,80 @@ export function usePeerConnection({
               } catch (err) {}
             }
           };
+
+          sdpChannel.onmessage = async (e) => {
+            if (!e.data || e.data.senderId === (currentUserId || userName)) return;
+            const uId = (currentUserId || userName || '').toLowerCase();
+            const cId = (callSignal.callerId || '').toLowerCase();
+            const cName = (callSignal.callerName || '').toLowerCase();
+            const isCaller = cId === uId || (cName !== '' && cName === uId);
+
+            if (e.data.type === 'OFFER_SDP' && !isCaller && pc) {
+              try {
+                console.log('[WebRTC BroadcastChannel] Receiver got OFFER_SDP');
+                const offerDesc = new RTCSessionDescription(e.data.sdp);
+                await pc.setRemoteDescription(offerDesc);
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+
+                if (pc.localDescription) {
+                  sdpChannel?.postMessage({
+                    type: 'ANSWER_SDP',
+                    senderId: currentUserId || userName,
+                    sdp: pc.localDescription
+                  });
+                  updateCallSignalInFirestore(callSignal.id, {
+                    answerSdp: JSON.stringify(pc.localDescription)
+                  });
+                }
+              } catch (err) {
+                console.warn('[WebRTC BroadcastChannel] Offer handling error:', err);
+              }
+            } else if (e.data.type === 'ANSWER_SDP' && isCaller && pc) {
+              try {
+                if (pc.signalingState === 'have-local-offer') {
+                  console.log('[WebRTC BroadcastChannel] Caller got ANSWER_SDP');
+                  const answerDesc = new RTCSessionDescription(e.data.sdp);
+                  await pc.setRemoteDescription(answerDesc);
+                }
+              } catch (err) {
+                console.warn('[WebRTC BroadcastChannel] Answer handling error:', err);
+              }
+            }
+          };
         } catch (e) {}
       }
 
       // Attach 'ontrack' listener BEFORE media streams & SDP exchange begin
       pc.ontrack = (event) => {
-        console.log('[WebRTC] ontrack event fired. Track kind:', event.track?.kind, 'ID:', event.track?.id, 'Streams count:', event.streams?.length);
+        console.log('[WebRTC] ontrack fired. Track kind:', event.track?.kind, 'ID:', event.track?.id);
         setIsRemoteConnected(true);
-        if (event.streams && event.streams[0]) {
-          remoteStreamRef.current = event.streams[0];
-          if (remoteAudioRef.current) {
-            try {
-              remoteAudioRef.current.srcObject = event.streams[0];
-              remoteAudioRef.current.muted = !isSpeakerOn;
-              remoteAudioRef.current.volume = isSpeakerOn ? 1.0 : 0.0;
-              remoteAudioRef.current.play().catch((err) => console.warn('[WebRTC] Remote audio play error:', err));
-              console.log('[WebRTC] Track attached to remote audio element');
-            } catch (e) {
-              console.error('[WebRTC] Failed setting remote audio element srcObject:', e);
-            }
-          }
-          if (remoteVideoRef.current) {
-            try {
-              remoteVideoRef.current.srcObject = event.streams[0];
-              remoteVideoRef.current.play().catch((err) => console.warn('[WebRTC] Remote video play error:', err));
-              console.log('[WebRTC] Track successfully added to remote video element:', event.track?.kind);
-            } catch (e) {
-              console.error('[WebRTC] Failed setting remote video element srcObject:', e);
-            }
-          }
+
+        let stream = event.streams && event.streams[0];
+        if (!stream) {
+          stream = new MediaStream([event.track]);
+        }
+        remoteStreamRef.current = stream;
+
+        if (remoteAudioRef.current) {
+          try {
+            remoteAudioRef.current.srcObject = stream;
+            remoteAudioRef.current.muted = !isSpeakerOn;
+            remoteAudioRef.current.volume = isSpeakerOn ? 1.0 : 0.0;
+            remoteAudioRef.current.play().catch((err) => console.warn('[WebRTC] Remote audio play error:', err));
+          } catch (e) {}
+        }
+        if (remoteVideoRef.current) {
+          try {
+            remoteVideoRef.current.srcObject = stream;
+            remoteVideoRef.current.play().catch((err) => console.warn('[WebRTC] Remote video play error:', err));
+          } catch (e) {}
         }
       };
 
       // Attach 'onicecandidate' handler
       pc.onicecandidate = (event) => {
         if (event.candidate && callSignal?.id) {
-          console.log('[WebRTC] Local ICE candidate generated:', event.candidate.candidate);
           try {
             const candJson = JSON.stringify(event.candidate.toJSON());
 
@@ -124,33 +165,17 @@ export function usePeerConnection({
             const cName = (callSignal.callerName || '').toLowerCase();
             const role = (cId === uId || (cName !== '' && cName === uId)) ? 'caller' : 'receiver';
             addIceCandidateToFirestore(callSignal.id, role, candJson);
-            console.log(`[WebRTC] ICE candidate dispatched to Firestore for role [${role}]`);
-          } catch (err) {
-            console.error('[WebRTC] Error processing local ICE candidate:', err);
-          }
-        } else if (!event.candidate) {
-          console.log('[WebRTC] Local ICE candidate gathering completed.');
+          } catch (err) {}
         }
       };
 
       // Connection state monitor
       pc.oniceconnectionstatechange = () => {
-        console.log('[WebRTC] ICE connection state changed:', pc?.iceConnectionState);
+        console.log('[WebRTC] ICE connection state:', pc?.iceConnectionState);
         if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
           setIsRemoteConnected(true);
         }
       };
-
-      // Attach local media stream tracks if available
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => {
-          if (pc && mediaStreamRef.current) {
-            try {
-              pc.addTrack(track, mediaStreamRef.current);
-            } catch (e) {}
-          }
-        });
-      }
 
     } catch (err) {
       console.warn('WebRTC peer connection setup error:', err);
@@ -164,36 +189,87 @@ export function usePeerConnection({
       if (iceChannel) {
         try { iceChannel.close(); } catch (e) {}
       }
+      if (sdpChannel) {
+        try { sdpChannel.close(); } catch (e) {}
+      }
     };
   }, [isOpen, callSignal?.id]);
 
-  // 2. Handle Offer / Answer SDP Exchange & Candidate Synchronization
+  // 2. Continuously ensure local media tracks are attached to PeerConnection
+  useEffect(() => {
+    if (!isOpen || !peerConnectionRef.current) return;
+
+    const attachTracks = () => {
+      const pc = peerConnectionRef.current;
+      if (!pc || pc.signalingState === 'closed') return;
+
+      if (mediaStreamRef.current) {
+        const existingSenders = pc.getSenders();
+        mediaStreamRef.current.getTracks().forEach(track => {
+          const sender = existingSenders.find(s => s.track?.kind === track.kind);
+          if (sender) {
+            if (sender.track !== track) {
+              sender.replaceTrack(track).catch(() => {});
+            }
+          } else {
+            try {
+              pc.addTrack(track, mediaStreamRef.current!);
+            } catch (e) {}
+          }
+        });
+      }
+    };
+
+    attachTracks();
+    const interval = setInterval(attachTracks, 500);
+    return () => clearInterval(interval);
+  }, [isOpen, mediaStreamRef.current]);
+
+  // 3. Handle Offer / Answer SDP Exchange & Candidate Synchronization
   useEffect(() => {
     if (!isOpen || !callSignal || !callSignal.id || !peerConnectionRef.current) return;
 
     const pc = peerConnectionRef.current;
+    if (pc.signalingState === 'closed') return;
+
     const uId = (currentUserId || userName || '').toLowerCase();
     const cId = (callSignal.callerId || '').toLowerCase();
     const cName = (callSignal.callerName || '').toLowerCase();
     const isCaller = cId === uId || (cName !== '' && cName === uId);
 
+    const sdpChannel = typeof BroadcastChannel !== 'undefined'
+      ? new BroadcastChannel(`near_intent_webrtc_sdp_${callSignal.id}`)
+      : null;
+
     if (isCaller) {
-      // Caller: Create Offer if not present
+      // Caller: Create Offer
       if (!callSignal.offerSdp && pc.signalingState === 'stable') {
+        // Ensure local tracks are attached before offer creation
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach(t => {
+            try { pc.addTrack(t, mediaStreamRef.current!); } catch (e) {}
+          });
+        }
+
         pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
           .then(offer => pc.setLocalDescription(offer))
           .then(() => {
             if (pc.localDescription) {
-              console.log('[WebRTC] Caller created & set local offer SDP');
+              console.log('[WebRTC] Caller created local offer SDP');
+              sdpChannel?.postMessage({
+                type: 'OFFER_SDP',
+                senderId: currentUserId || userName,
+                sdp: pc.localDescription
+              });
               updateCallSignalInFirestore(callSignal.id, {
                 offerSdp: JSON.stringify(pc.localDescription)
               });
             }
           })
-          .catch(e => console.warn('WebRTC createOffer error:', e));
+          .catch(e => console.warn('[WebRTC] createOffer error:', e));
       } else if (callSignal.answerSdp && pc.signalingState === 'have-local-offer') {
         try {
-          console.log('[WebRTC] Caller setting remote answer SDP');
+          console.log('[WebRTC] Caller setting remote answer SDP from Firestore');
           const answerDesc = new RTCSessionDescription(JSON.parse(callSignal.answerSdp));
           pc.setRemoteDescription(answerDesc)
             .then(() => {
@@ -201,16 +277,14 @@ export function usePeerConnection({
                 callSignal.receiverIceCandidates.forEach(candStr => {
                   if (!addedCandidatesRef.current.has(candStr)) {
                     try {
-                      pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).then(() => {
-                        console.log('[WebRTC] Added remote receiver ICE candidate to PeerConnection');
-                      }).catch(() => {});
+                      pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).catch(() => {});
                       addedCandidatesRef.current.add(candStr);
                     } catch (e) {}
                   }
                 });
               }
             })
-            .catch(e => console.warn('WebRTC setRemoteDescription answer error:', e));
+            .catch(e => console.warn('[WebRTC] Caller setRemoteDescription answer error:', e));
         } catch (e) {}
       }
 
@@ -219,9 +293,7 @@ export function usePeerConnection({
         callSignal.receiverIceCandidates.forEach(candStr => {
           if (!addedCandidatesRef.current.has(candStr)) {
             try {
-              pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).then(() => {
-                console.log('[WebRTC] Added remote receiver ICE candidate to PeerConnection');
-              }).catch(() => {});
+              pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).catch(() => {});
               addedCandidatesRef.current.add(candStr);
             } catch (e) {}
           }
@@ -231,14 +303,26 @@ export function usePeerConnection({
       // Receiver: Process Offer & Create Answer
       if (callSignal.offerSdp && !callSignal.answerSdp && pc.signalingState === 'stable') {
         try {
-          console.log('[WebRTC] Receiver setting remote offer SDP');
+          console.log('[WebRTC] Receiver setting remote offer SDP from Firestore');
           const offerDesc = new RTCSessionDescription(JSON.parse(callSignal.offerSdp));
           pc.setRemoteDescription(offerDesc)
-            .then(() => pc.createAnswer())
+            .then(() => {
+              if (mediaStreamRef.current) {
+                mediaStreamRef.current.getTracks().forEach(t => {
+                  try { pc.addTrack(t, mediaStreamRef.current!); } catch (e) {}
+                });
+              }
+              return pc.createAnswer();
+            })
             .then(answer => pc.setLocalDescription(answer))
             .then(() => {
               if (pc.localDescription) {
-                console.log('[WebRTC] Receiver created & set local answer SDP');
+                console.log('[WebRTC] Receiver created local answer SDP');
+                sdpChannel?.postMessage({
+                  type: 'ANSWER_SDP',
+                  senderId: currentUserId || userName,
+                  sdp: pc.localDescription
+                });
                 updateCallSignalInFirestore(callSignal.id, {
                   answerSdp: JSON.stringify(pc.localDescription)
                 });
@@ -247,9 +331,7 @@ export function usePeerConnection({
                 callSignal.callerIceCandidates.forEach(candStr => {
                   if (!addedCandidatesRef.current.has(candStr)) {
                     try {
-                      pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).then(() => {
-                        console.log('[WebRTC] Added remote caller ICE candidate to PeerConnection');
-                      }).catch(() => {});
+                      pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).catch(() => {});
                       addedCandidatesRef.current.add(candStr);
                     } catch (e) {}
                   }
@@ -265,15 +347,19 @@ export function usePeerConnection({
         callSignal.callerIceCandidates.forEach(candStr => {
           if (!addedCandidatesRef.current.has(candStr)) {
             try {
-              pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).then(() => {
-                console.log('[WebRTC] Added remote caller ICE candidate to PeerConnection');
-              }).catch(() => {});
+              pc.addIceCandidate(new RTCIceCandidate(JSON.parse(candStr))).catch(() => {});
               addedCandidatesRef.current.add(candStr);
             } catch (e) {}
           }
         });
       }
     }
+
+    return () => {
+      if (sdpChannel) {
+        try { sdpChannel.close(); } catch (e) {}
+      }
+    };
   }, [
     isOpen,
     callSignal?.id,

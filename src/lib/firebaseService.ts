@@ -333,25 +333,11 @@ export async function addIceCandidateToFirestore(callId: string, role: 'caller' 
   try {
     const callRef = doc(db, CALLS_COLLECTION, callId);
     const field = role === 'caller' ? 'callerIceCandidates' : 'receiverIceCandidates';
-    await updateDoc(callRef, {
+    await setDoc(callRef, {
       [field]: arrayUnion(candidateJson),
       updatedAtIso: new Date().toISOString()
-    });
+    }, { merge: true });
   } catch (err) {
-    try {
-      const callRef = doc(db, CALLS_COLLECTION, callId);
-      const field = role === 'caller' ? 'callerIceCandidates' : 'receiverIceCandidates';
-      const snap = await getDoc(callRef);
-      if (snap.exists()) {
-        const existing = snap.data()[field] || [];
-        if (!existing.includes(candidateJson)) {
-          await setDoc(callRef, { [field]: [...existing, candidateJson] }, { merge: true });
-        }
-      } else {
-        await setDoc(callRef, { [field]: [candidateJson] }, { merge: true });
-      }
-    } catch (e) {
-      console.error('addIceCandidateToFirestore error:', e);
-    }
+    console.error('Firestore addIceCandidate error:', err);
   }
 }
